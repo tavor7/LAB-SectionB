@@ -86,7 +86,7 @@ DEV_EVAL_NUM_QUERIES=10 python -u eval_dev.py
 
 ## Collaboration (pair grading)
 
-See **[AUTHORS.md](AUTHORS.md)** and **[docs/COLLABORATION.md](docs/COLLABORATION.md)**. Git history must show **meaningful commits from both partners** — not a single dump at the deadline.
+See **[AUTHORS.md](AUTHORS.md)**. Git history must show **meaningful commits from both partners** — not a single dump at the deadline.
 
 ## Submit
 
