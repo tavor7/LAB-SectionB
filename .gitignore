@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.eggs/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build logs (offline index runs)
+build_full*.log
+*.log
+
+# Full Wikipedia corpus is in the course handout (not in git)
+data/*
+!data/public_queries.json
+
+# Large handout duplicates (not part of submission)
+SectionB.zip
+Project A.pdf
+
+# Manual index backups (do not commit duplicate artifact trees)
+artifacts_backup*/
+
+# Intermediate build shards (final faiss/BM25/page_ids are enough for grading)
+artifacts/shards/
+artifacts/build_checkpoint.json
+
+# OS
+.DS_Store
+Thumbs.db
