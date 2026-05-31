@@ -7,4 +7,4 @@
 
 Replace the partner row with your teammate’s name and handle before submission.
 
-Both members must appear in `git log` with substantive commits (see `docs/COLLABORATION.md`).
+Both members must appear in `git log` with substantive commits.
