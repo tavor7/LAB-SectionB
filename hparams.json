@@ -1,0 +1,38 @@
+{
+  "seed": 13,
+  "chunking": {
+    "chunk_words": 140,
+    "overlap_words": 35,
+    "title_chunk": true
+  },
+  "faiss_hnsw": {
+    "M": 32,
+    "ef_construction": 200,
+    "ef_search_min": 128,
+    "ef_search_cap": 256
+  },
+  "bm25": {
+    "k1": 1.5,
+    "b": 0.75
+  },
+  "retrieve": {
+    "mode": "hnsw",
+    "save_vectors": true,
+    "use_bm25": true,
+    "candidate_multiplier": 300,
+    "bm25_candidate_multiplier": 300,
+    "page_aggregation": "max_plus_mean_top3",
+    "rrf_k": 15,
+    "dense_rrf_weight": 1.0,
+    "bm25_rrf_weight": 1.0
+  },
+  "dev_build": {
+    "neg_pages": 3000,
+    "num_queries": 10,
+    "query_seed": 0
+  },
+  "build": {
+    "embed_batch_size": 64,
+    "checkpoint_pages_per_shard": 200
+  }
+}
