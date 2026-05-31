@@ -12,7 +12,15 @@ import numpy as np
 from chunk import Chunk, chunk_corpus
 from config import hp_get, load_hparams
 from embed import embed_texts
-from lexical import build_bm25_index, save_bm25_index
+from lexical import (
+    build_bm25_index,
+    copy_bm25_artifacts,
+    has_bm25_index,
+    load_bm25_index,
+    log_build_progress,
+    save_bm25_index,
+    _progress_step,
+)
 from utils import (
     ARTIFACTS_DIR,
     ensure_artifacts_dir,
@@ -26,6 +34,11 @@ META_NAME = "meta.json"
 VECTORS_NAME = "index_vectors.npy"
 SHARDS_DIR_NAME = "shards"
 CHECKPOINT_NAME = "build_checkpoint.json"
+PAGE_FEATURES_NAME = "page_features.npz"
+
+
+def format_page_text(title: str, content: str) -> str:
+    return f"Title: {title}\nContent: {content}"
 
 
 def _as_float32(x: np.ndarray) -> np.ndarray:
@@ -38,13 +51,128 @@ def _collect_chunk_texts(selected_paths: List[Path]) -> Tuple[List[str], np.ndar
     """Re-read corpus pages and produce chunk texts aligned with dense index."""
     texts: List[str] = []
     page_ids_list: List[int] = []
-    for path in selected_paths:
+    total = len(selected_paths)
+    step = _progress_step(total)
+    log_build_progress(0, total, "load corpus chunks")
+    for i, path in enumerate(selected_paths):
         data = json.loads(path.read_text(encoding="utf-8"))
         data["page_id"] = int(data.get("page_id", path.stem))
         for chunk in chunk_corpus([data]):
             texts.append(chunk.text)
             page_ids_list.append(chunk.page_id)
+        if i % step == 0 or i == total - 1:
+            log_build_progress(i + 1, total, "load corpus chunks")
     return texts, np.asarray(page_ids_list, dtype=np.int64)
+
+
+def _collect_page_level_texts(
+    selected_paths: List[Path],
+) -> Tuple[List[str], List[str], np.ndarray]:
+    """Title-only and full-page texts plus page_ids for page-level BM25."""
+    title_texts: List[str] = []
+    page_texts: List[str] = []
+    page_ids_list: List[int] = []
+
+    total = len(selected_paths)
+    step = _progress_step(total)
+    log_build_progress(0, total, "load corpus pages")
+    for i, path in enumerate(selected_paths):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(data.get("page_id", path.stem))
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content", "")).strip()
+        page_ids_list.append(pid)
+        title_texts.append(format_page_text(title, title))
+        page_texts.append(format_page_text(title, content))
+        if i % step == 0 or i == total - 1:
+            log_build_progress(i + 1, total, "load corpus pages")
+
+    return title_texts, page_texts, np.asarray(page_ids_list, dtype=np.int64)
+
+
+def _save_page_features(
+    selected_paths: List[Path],
+    out_dir: Path,
+) -> None:
+    page_ids_list: List[int] = []
+    titles: List[str] = []
+    contents: List[str] = []
+
+    total = len(selected_paths)
+    step = _progress_step(total)
+    log_build_progress(0, total, "page_features load")
+    for i, path in enumerate(selected_paths):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(data.get("page_id", path.stem))
+        page_ids_list.append(pid)
+        titles.append(str(data.get("title", "")).strip())
+        contents.append(str(data.get("content", "")).strip())
+        if i % step == 0 or i == total - 1:
+            log_build_progress(i + 1, total, "page_features load")
+
+    order = np.argsort(np.asarray(page_ids_list, dtype=np.int64))
+    log_build_progress(total, total, "page_features save")
+    pids = np.asarray(page_ids_list, dtype=np.int64)[order]
+    np.savez_compressed(
+        out_dir / PAGE_FEATURES_NAME,
+        page_ids=pids,
+        titles=np.asarray([titles[i] for i in order], dtype=object),
+        contents=np.asarray([contents[i] for i in order], dtype=object),
+    )
+
+
+def _build_extended_artifacts(
+    out_dir: Path,
+    selected_paths: List[Path],
+    hp: Dict[str, Any],
+    *,
+    chunk_bm25_index=None,
+) -> None:
+    """Title/page BM25, chunk BM25 aliases, and page_features.npz."""
+    k1 = float(hp_get(hp, "bm25.k1", 1.5))
+    b = float(hp_get(hp, "bm25.b", 0.75))
+
+    title_texts, page_texts, page_pids = _collect_page_level_texts(selected_paths)
+
+    print("[build] bm25_title=building...", flush=True)
+    title_index = build_bm25_index(
+        title_texts, page_pids, k1=k1, b=b, progress_label="bm25_title"
+    )
+    save_bm25_index(title_index, out_dir, prefix="title")
+    print(f"[build] bm25_title=done n_docs={title_index.n_docs}", flush=True)
+
+    print("[build] bm25_page=building...", flush=True)
+    page_index = build_bm25_index(
+        page_texts, page_pids, k1=k1, b=b, progress_label="bm25_page"
+    )
+    save_bm25_index(page_index, out_dir, prefix="page")
+    print(f"[build] bm25_page=done n_docs={page_index.n_docs}", flush=True)
+
+    if chunk_bm25_index is not None:
+        save_bm25_index(chunk_bm25_index, out_dir, prefix="chunk")
+        save_bm25_index(chunk_bm25_index, out_dir, prefix=None)
+    elif has_bm25_index(out_dir, "chunk"):
+        save_bm25_index(load_bm25_index(out_dir, prefix="chunk"), out_dir, prefix=None)
+    elif (out_dir / "bm25_vocab.json").is_file():
+        copy_bm25_artifacts(out_dir, src_prefix=None, dst_prefix="chunk")
+        print("[build] bm25_chunk=aliased from legacy bm25_*", flush=True)
+    else:
+        print("[build] bm25_chunk=building from chunks...", flush=True)
+        bm25_texts, bm25_page_ids = _collect_chunk_texts(selected_paths)
+        chunk_index = build_bm25_index(
+            bm25_texts, bm25_page_ids, k1=k1, b=b, progress_label="bm25_chunk"
+        )
+        save_bm25_index(chunk_index, out_dir, prefix="chunk")
+        save_bm25_index(chunk_index, out_dir, prefix=None)
+        print(f"[build] bm25_chunk=done n_docs={chunk_index.n_docs}", flush=True)
+
+    print("[build] page_features=saving...", flush=True)
+    _save_page_features(selected_paths, out_dir)
+    print("[build] page_features=done", flush=True)
+
+
+def _dense_artifacts_complete(out_dir: Path) -> bool:
+    return (out_dir / FAISS_INDEX_NAME).is_file() and (out_dir / PAGE_IDS_NAME).is_file()
 
 
 def build_index(
@@ -190,7 +318,17 @@ def build_index(
             checkpoint_path.unlink()
 
     total_pages = len(selected_paths)
-    if start_i >= total_pages:
+    skip_dense_build = (
+        start_i >= total_pages
+        and _dense_artifacts_complete(out_dir)
+        and resume_ok
+    )
+    if skip_dense_build:
+        print(
+            "[build] dense artifacts present; skipping re-embed and FAISS rebuild",
+            flush=True,
+        )
+    elif start_i >= total_pages:
         print("[build] embeddings already completed (checkpoint at end)", flush=True)
     else:
         for batch_start in range(start_i, total_pages, pages_per_shard):
@@ -242,73 +380,109 @@ def build_index(
                 json.dumps(checkpoint, indent=2), encoding="utf-8"
             )
 
-    # Concatenate shards into final arrays for indexing.
-    shard_files = sorted(shards_dir.glob("shard_*.npz"))
-    if not shard_files:
-        raise RuntimeError(
-            f"No shard files found under {shards_dir}. Build cannot continue."
-        )
-
-    all_vecs: List[np.ndarray] = []
-    all_page_ids: List[np.ndarray] = []
-    all_chunk_ids: List[np.ndarray] = []
-    for sf in shard_files:
-        data = np.load(sf)
-        all_vecs.append(_as_float32(data["vectors"]))
-        all_page_ids.append(np.asarray(data["page_ids"], dtype=np.int64))
-        all_chunk_ids.append(np.asarray(data["chunk_ids"], dtype=np.int32))
-
-    vectors = np.vstack(all_vecs) if len(all_vecs) > 1 else all_vecs[0]
-    page_ids_arr = (
-        np.concatenate(all_page_ids) if len(all_page_ids) > 1 else all_page_ids[0]
-    )
-    chunk_ids_arr = (
-        np.concatenate(all_chunk_ids)
-        if len(all_chunk_ids) > 1
-        else all_chunk_ids[0]
-    )
-    page_ids = [int(x) for x in page_ids_arr.tolist()]
-
-    if vectors.ndim != 2 or vectors.shape[0] != len(page_ids):
-        raise ValueError(
-            f"Bad embedding matrix shape={vectors.shape}, num_page_ids={len(page_ids)}"
-        )
-
-    dim = int(vectors.shape[1])
-
-    # HNSW over inner product (vectors are L2-normalized in embed_texts).
-    # Tunables: M controls graph degree; efConstruction impacts build time/quality.
+    chunk_bm25_index = None
     M = int(hp_get(hp, "faiss_hnsw.M", 32))
     ef_construction = int(hp_get(hp, "faiss_hnsw.ef_construction", 200))
-    print(
-        f"[build] faiss_build=indexhnswflat dim={dim} M={M} efC={ef_construction}",
-        flush=True,
-    )
-    index = faiss.IndexHNSWFlat(dim, M, faiss.METRIC_INNER_PRODUCT)
-    index.hnsw.efConstruction = ef_construction
-    index.add(vectors)
-
-    print("[build] writing artifacts...", flush=True)
-    faiss.write_index(index, str(out_dir / FAISS_INDEX_NAME))
-    np.save(out_dir / PAGE_IDS_NAME, np.asarray(page_ids, dtype=np.int64))
     save_vectors = bool(hp_get(hp, "retrieve.save_vectors", True))
     retrieve_mode = str(hp_get(hp, "retrieve.mode", "brute")).lower()
-    if save_vectors or retrieve_mode == "brute":
-        np.save(out_dir / VECTORS_NAME, vectors)
 
-    print("[build] bm25_index=building...", flush=True)
-    bm25_texts, bm25_page_ids = _collect_chunk_texts(selected_paths)
-    if len(bm25_texts) != len(page_ids):
-        raise ValueError(
-            f"BM25 chunk count {len(bm25_texts)} != dense count {len(page_ids)}"
+    if skip_dense_build:
+        page_ids_arr = np.load(out_dir / PAGE_IDS_NAME)
+        page_ids = [int(x) for x in page_ids_arr.tolist()]
+        meta_path = out_dir / META_NAME
+        if meta_path.exists():
+            meta_prev = json.loads(meta_path.read_text(encoding="utf-8"))
+            dim = int(meta_prev.get("embedding_dim", 384))
+            chunk_ids_list = meta_prev.get("chunk_ids", [])
+        else:
+            dim = 384
+            chunk_ids_list = []
+        vec_path = out_dir / VECTORS_NAME
+        vectors = np.load(vec_path, mmap_mode="r") if vec_path.exists() else np.zeros((0, dim))
+    else:
+        shard_files = sorted(shards_dir.glob("shard_*.npz"))
+        if not shard_files:
+            raise RuntimeError(
+                f"No shard files found under {shards_dir}. Build cannot continue."
+            )
+
+        all_vecs: List[np.ndarray] = []
+        all_page_ids: List[np.ndarray] = []
+        all_chunk_ids: List[np.ndarray] = []
+        for sf in shard_files:
+            data = np.load(sf)
+            all_vecs.append(_as_float32(data["vectors"]))
+            all_page_ids.append(np.asarray(data["page_ids"], dtype=np.int64))
+            all_chunk_ids.append(np.asarray(data["chunk_ids"], dtype=np.int32))
+
+        vectors = np.vstack(all_vecs) if len(all_vecs) > 1 else all_vecs[0]
+        page_ids_arr = (
+            np.concatenate(all_page_ids) if len(all_page_ids) > 1 else all_page_ids[0]
         )
-    if not np.array_equal(bm25_page_ids, page_ids_arr):
-        raise ValueError("BM25 page_ids do not align with dense index page_ids")
-    k1 = float(hp_get(hp, "bm25.k1", 1.5))
-    b = float(hp_get(hp, "bm25.b", 0.75))
-    bm25_index = build_bm25_index(bm25_texts, bm25_page_ids, k1=k1, b=b)
-    save_bm25_index(bm25_index, out_dir)
-    print(f"[build] bm25_index=done n_docs={bm25_index.n_docs}", flush=True)
+        chunk_ids_arr = (
+            np.concatenate(all_chunk_ids)
+            if len(all_chunk_ids) > 1
+            else all_chunk_ids[0]
+        )
+        page_ids = [int(x) for x in page_ids_arr.tolist()]
+        chunk_ids_list = [int(x) for x in chunk_ids_arr.tolist()]
+
+        if vectors.ndim != 2 or vectors.shape[0] != len(page_ids):
+            raise ValueError(
+                f"Bad embedding matrix shape={vectors.shape}, num_page_ids={len(page_ids)}"
+            )
+
+        dim = int(vectors.shape[1])
+        print(
+            f"[build] faiss_build=indexhnswflat dim={dim} M={M} efC={ef_construction}",
+            flush=True,
+        )
+        index = faiss.IndexHNSWFlat(dim, M, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efConstruction = ef_construction
+        index.add(vectors)
+
+        print("[build] writing dense artifacts...", flush=True)
+        faiss.write_index(index, str(out_dir / FAISS_INDEX_NAME))
+        np.save(out_dir / PAGE_IDS_NAME, np.asarray(page_ids, dtype=np.int64))
+        if save_vectors or retrieve_mode == "brute":
+            np.save(out_dir / VECTORS_NAME, vectors)
+
+        if not has_bm25_index(out_dir, "chunk") and not (
+            out_dir / "bm25_vocab.json"
+        ).is_file():
+            print("[build] bm25_chunk=building...", flush=True)
+            bm25_texts, bm25_page_ids = _collect_chunk_texts(selected_paths)
+            if len(bm25_texts) != len(page_ids):
+                raise ValueError(
+                    f"BM25 chunk count {len(bm25_texts)} != dense count {len(page_ids)}"
+                )
+            if not np.array_equal(bm25_page_ids, page_ids_arr):
+                raise ValueError("BM25 page_ids do not align with dense index page_ids")
+            k1 = float(hp_get(hp, "bm25.k1", 1.5))
+            b = float(hp_get(hp, "bm25.b", 0.75))
+            chunk_bm25_index = build_bm25_index(
+                bm25_texts,
+                bm25_page_ids,
+                k1=k1,
+                b=b,
+                progress_label="bm25_chunk",
+            )
+            save_bm25_index(chunk_bm25_index, out_dir, prefix="chunk")
+            save_bm25_index(chunk_bm25_index, out_dir, prefix=None)
+            print(f"[build] bm25_chunk=done n_docs={chunk_bm25_index.n_docs}", flush=True)
+
+    _build_extended_artifacts(
+        out_dir, selected_paths, hp, chunk_bm25_index=chunk_bm25_index
+    )
+
+    if skip_dense_build and (out_dir / META_NAME).exists():
+        dim = int(
+            json.loads((out_dir / META_NAME).read_text(encoding="utf-8")).get(
+                "embedding_dim", 384
+            )
+        )
+    elif not skip_dense_build:
+        dim = int(vectors.shape[1])
 
     meta: Dict[str, Any] = {
         "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -324,18 +498,32 @@ def build_index(
             "overlap_words": int(hp_get(hp, "chunking.overlap_words", 35)),
             "title_chunk": bool(hp_get(hp, "chunking.title_chunk", True)),
         },
-        "chunk_ids": [int(x) for x in chunk_ids_arr.tolist()],
-        "has_vectors_npy": save_vectors or retrieve_mode == "brute",
+        "chunk_ids": chunk_ids_list,
+        "has_vectors_npy": (out_dir / VECTORS_NAME).is_file(),
         "has_bm25": True,
+        "has_bm25_chunk": has_bm25_index(out_dir, "chunk"),
+        "has_bm25_title": has_bm25_index(out_dir, "title"),
+        "has_bm25_page": has_bm25_index(out_dir, "page"),
+        "has_page_features": (out_dir / PAGE_FEATURES_NAME).is_file(),
         "checkpointing": {
             "shards_dir": SHARDS_DIR_NAME,
             "checkpoint_file": CHECKPOINT_NAME,
             "pages_per_shard": pages_per_shard,
         },
     }
+    if skip_dense_build and (out_dir / META_NAME).exists():
+        prev = json.loads((out_dir / META_NAME).read_text(encoding="utf-8"))
+        if not meta["chunk_ids"] and prev.get("chunk_ids"):
+            meta["chunk_ids"] = prev["chunk_ids"]
+
     (out_dir / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"[build] done artifacts_dir={out_dir}", flush=True)
-    return vectors, page_ids
+    if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
+        return vectors, page_ids
+    vec_path = out_dir / VECTORS_NAME
+    if vec_path.exists():
+        return np.load(vec_path), page_ids
+    return np.zeros((len(page_ids), meta["embedding_dim"]), dtype=np.float32), page_ids
 
 
 def load_index(
