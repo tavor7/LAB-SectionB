@@ -1,4 +1,4 @@
-# Section B — Hybrid retrieval (dense + BM25)
+# Section B — Multi-index hybrid retrieval
 
 Wikipedia page retrieval for Section B. The autograder calls `main.run(queries)`; this repo ships **prebuilt `artifacts/`** so staff do not rebuild the index at grading time.
 
@@ -20,20 +20,21 @@ Expected output includes `mean_ndcg@10=...` and `query_phase_time=...`.
 | Path | Role |
 |------|------|
 | `main.py` | Entry point: `run(queries)` → ranked `page_id` lists |
-| `retrieve.py` | Query-time hybrid search (dense + BM25 + RRF) |
+| `retrieve.py` | Query-time multi-index retrieval + feature rerank |
+| `query_expand.py` | Stopword-stripped keyword queries for BM25 |
 | `embed.py` | MiniLM query/chunk embeddings |
-| `index.py` | Offline FAISS + artifact writers (not timed at grading) |
-| `lexical.py` | BM25 index build/load/search |
-| `chunk.py` | Title + body word-window chunking |
+| `index.py` | Offline FAISS + BM25 artifact writers (not timed at grading) |
+| `lexical.py` | BM25 build/load/search (chunk, title, page indexes) |
+| `chunk.py` | Title + body word-window chunking (140/35 words) |
 | `config.py` / `hparams.json` | Hyperparameters |
 | `utils.py` | Paths, corpus helpers |
 | `eval.py` | NDCG metrics (course file — do not edit) |
 | `scripts/eval_public.py` | Self-test on 50 public queries |
-| `scripts/build_index.py` | Offline full index build |
+| `scripts/build_index.py` | Offline full / incremental index build |
 | `artifacts/` | **Required** precomputed index (see below) |
 | `data/public_queries.json` | Public eval queries + labels (small; in repo) |
 
-The full Wikipedia corpus (`data/Wikipedia Entries/`) is **not** in git; it ships with the course handout and is only needed to **rebuild** the index locally.
+The full Wikipedia corpus (`data/Wikipedia Entries/`) is **not** in git; it is only needed to **rebuild** the index locally.
 
 ## Artifacts (required in repo)
 
@@ -45,21 +46,25 @@ The full Wikipedia corpus (`data/Wikipedia Entries/`) is **not** in git; it ship
 | `page_ids.npy` | int64: embedding row → `page_id` |
 | `index_vectors.npy` | float32 chunk embeddings (brute dense mode) |
 | `meta.json` | Model name, dims, chunking metadata |
-| `bm25_vocab.json` | Term → term id |
-| `bm25_idf.npy`, `bm25_indptr.npy`, `bm25_indices.npy`, `bm25_data.npy` | BM25 inverted index (CSR) |
-| `bm25_doc_lens.npy`, `bm25_avgdl.json` | BM25 length stats |
-| `bm25_page_ids.npy` | `page_id` per BM25 document row |
+| `bm25_chunk_*` | BM25 over content chunks (primary lexical index) |
+| `bm25_title_*` | BM25 over title-only documents (one per page) |
+| `bm25_page_*` | BM25 over full-page documents (one per page) |
+| `page_features.npz` | `page_id`, `title`, `content` for rerank features |
+| `bm25_vocab.json` … `bm25_page_ids.npy` | Legacy chunk BM25 names (alias of `bm25_chunk_*`) |
 
 Large binaries are tracked with **Git LFS**. After clone, always run `git lfs pull`.
 
-## Retrieval design
+## Retrieval pipeline (query time)
 
-1. **Chunking** — title-only chunk + overlapping body windows (`chunk.py`, `hparams.json`).
-2. **Dense** — `sentence-transformers/all-MiniLM-L6-v2`; page score = aggregate of chunk scores (`retrieve.page_aggregation`).
-3. **Lexical** — BM25 over the same chunks (`lexical.py`).
-4. **Fusion** — weighted reciprocal rank fusion at page level (`retrieve.rrf_k`, `dense_rrf_weight`, `bm25_rrf_weight`).
+Three-way **weighted RRF** fusion (no hand-crafted feature rerank on the public path):
 
-Tune `hparams.json` for chunk sizes, candidate pool sizes, HNSW `ef_search`, and RRF weights.
+1. **Dense chunks (HNSW)** — `all-MiniLM-L6-v2` on the original query; top chunk hits aggregated per page with `max_plus_mean_top3`.
+2. **BM25 chunk** — same 140/35 word chunks as dense; **original query only** (matches legacy chunk BM25).
+3. **BM25 page** — one doc per page (`Title: …\nContent: full text`); merged original + keyword query (stopwords removed).
+
+Title-only BM25 is built offline but **disabled at query time** on the public eval — it hurt NDCG when fused. Page-level BM25 is the main gain over legacy (~0.236 → ~0.252 mean NDCG@10).
+
+If `page_features.npz` or prefixed BM25 indexes are missing, `retrieve.py` **falls back** to the legacy pipeline: dense + single chunk BM25 + weighted RRF.
 
 ## Local setup (developers only)
 
@@ -69,13 +74,23 @@ pip install -r requirements.txt
 
 Corpus: unzip handout into `data/Wikipedia Entries/` (same layout as the assignment).
 
-### Rebuild index (offline, not timed)
+### Build / extend index (offline, not timed)
 
 ```bash
 python scripts/build_index.py
 ```
 
-Long runs: use `nohup` and checkpointing under `artifacts/shards/` (see assignment notes). Resume by rerunning the same command if `hparams.json` chunking settings are unchanged.
+When dense artifacts and the build checkpoint are already complete, the script **skips re-embedding** and only builds `bm25_title_*`, `bm25_page_*`, `page_features.npz`, and `bm25_chunk_*` aliases (unless missing).
+
+Long first-time runs: use `nohup` and checkpointing under `artifacts/shards/`. Resume by rerunning the same command if `hparams.json` chunking settings are unchanged.
+
+### Evaluate on public queries
+
+```bash
+python scripts/eval_public.py
+```
+
+Prints `mean_ndcg@10` and `query_phase_time` (must stay under 60s for the full batch at grading).
 
 ### Dev tuning (small corpus)
 
