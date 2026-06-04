@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -78,3 +79,17 @@ def entry_text(record: Dict[str, Any]) -> str:
 def ensure_artifacts_dir() -> Path:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     return ARTIFACTS_DIR
+
+
+def resolve_artifacts_dir(override: Path | str | None = None) -> Path:
+    """
+    Resolve artifact root for retrieval/build.
+
+    Priority: explicit override → ARTIFACTS_DIR env → default artifacts/.
+    """
+    if override is not None:
+        return Path(override).expanduser().resolve()
+    env = os.environ.get("ARTIFACTS_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return ARTIFACTS_DIR.resolve()
