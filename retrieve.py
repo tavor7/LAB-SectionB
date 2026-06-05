@@ -11,75 +11,86 @@ from embed import embed_queries
 from index import load_index
 from lexical import has_bm25_index, load_bm25_index, tokenize
 from query_expand import query_versions
-from utils import ARTIFACTS_DIR, K_EVAL
+from utils import K_EVAL, resolve_artifacts_dir
 
 PAGE_FEATURES_NAME = "page_features.npz"
 
-_CACHED_PAGE_IDS = None
-_CACHED_FAISS_INDEX = None
-_CACHED_VECTORS = None
-_CACHED_BM25_CHUNK = None
-_CACHED_BM25_TITLE = None
-_CACHED_BM25_PAGE = None
-_CACHED_PAGE_LOOKUP: Optional[Dict[int, Tuple[str, str, frozenset]]] = None
+# Per-artifacts-dir cache so sweep variants do not clobber each other.
+_RETRIEVE_CACHE: Dict[str, Dict[str, object]] = {}
+
+PageLookupEntry = Tuple[str, str, frozenset, frozenset]
+
+
+def clear_retrieve_cache() -> None:
+    """Drop all cached indexes (use when switching artifact dirs in one process)."""
+    _RETRIEVE_CACHE.clear()
+
+
+def _cache_key(root: Path) -> str:
+    return str(root.resolve())
+
+
+def _cache_bucket(root: Path) -> Dict[str, object]:
+    key = _cache_key(root)
+    if key not in _RETRIEVE_CACHE:
+        _RETRIEVE_CACHE[key] = {}
+    return _RETRIEVE_CACHE[key]
+
+
+def _resolve_root(artifacts_dir: Optional[Path]) -> Path:
+    return resolve_artifacts_dir(artifacts_dir)
 
 
 def _get_page_ids(root: Path) -> np.ndarray:
-    global _CACHED_PAGE_IDS
-    if _CACHED_PAGE_IDS is None:
-        _CACHED_PAGE_IDS = np.load(root / "page_ids.npy")
-    return _CACHED_PAGE_IDS
+    bucket = _cache_bucket(root)
+    if "page_ids" not in bucket:
+        bucket["page_ids"] = np.load(root / "page_ids.npy")
+    return bucket["page_ids"]  # type: ignore[return-value]
 
 
 def _get_bm25(prefix: str, artifacts_dir: Optional[Path]):
-    global _CACHED_BM25_CHUNK, _CACHED_BM25_TITLE, _CACHED_BM25_PAGE
-    root = artifacts_dir or ARTIFACTS_DIR
-    if prefix == "chunk":
-        if _CACHED_BM25_CHUNK is None:
-            _CACHED_BM25_CHUNK = load_bm25_index(root, prefix="chunk")
-        return _CACHED_BM25_CHUNK
-    if prefix == "title":
-        if _CACHED_BM25_TITLE is None:
-            _CACHED_BM25_TITLE = load_bm25_index(root, prefix="title")
-        return _CACHED_BM25_TITLE
-    if prefix == "page":
-        if _CACHED_BM25_PAGE is None:
-            _CACHED_BM25_PAGE = load_bm25_index(root, prefix="page")
-        return _CACHED_BM25_PAGE
-    raise ValueError(f"unknown bm25 prefix: {prefix}")
+    root = _resolve_root(artifacts_dir)
+    bucket = _cache_bucket(root)
+    cache_name = f"bm25_{prefix}"
+    if cache_name not in bucket:
+        bucket[cache_name] = load_bm25_index(root, prefix=prefix)
+    return bucket[cache_name]
 
 
 def _get_faiss_index(artifacts_dir: Optional[Path]):
-    global _CACHED_FAISS_INDEX
-    if _CACHED_FAISS_INDEX is None:
-        _CACHED_FAISS_INDEX, _, _ = load_index(artifacts_dir)
-    return _CACHED_FAISS_INDEX
+    root = _resolve_root(artifacts_dir)
+    bucket = _cache_bucket(root)
+    if "faiss" not in bucket:
+        bucket["faiss"], _, _ = load_index(root)
+    return bucket["faiss"]
 
 
 def _get_vectors(root: Path) -> np.ndarray:
-    global _CACHED_VECTORS
-    if _CACHED_VECTORS is None:
-        _CACHED_VECTORS = np.load(root / "index_vectors.npy", mmap_mode="r")
-    return _CACHED_VECTORS
+    bucket = _cache_bucket(root)
+    if "vectors" not in bucket:
+        bucket["vectors"] = np.load(root / "index_vectors.npy", mmap_mode="r")
+    return bucket["vectors"]  # type: ignore[return-value]
 
 
-def _get_page_lookup(root: Path) -> Dict[int, Tuple[str, str, frozenset]]:
-    """page_id -> (title, content_lower, title_tokens)."""
-    global _CACHED_PAGE_LOOKUP
-    if _CACHED_PAGE_LOOKUP is None:
+def _get_page_lookup(root: Path) -> Dict[int, PageLookupEntry]:
+    """page_id -> (title, content_lower, title_tokens, content_tokens)."""
+    bucket = _cache_bucket(root)
+    if "page_lookup" not in bucket:
         data = np.load(root / PAGE_FEATURES_NAME, allow_pickle=True)
-        lookup: Dict[int, Tuple[str, str, frozenset]] = {}
+        lookup: Dict[int, PageLookupEntry] = {}
         for pid, title, content in zip(
             data["page_ids"], data["titles"], data["contents"]
         ):
             title_s = str(title)
+            content_s = str(content)
             lookup[int(pid)] = (
                 title_s,
-                str(content).lower(),
+                content_s.lower(),
                 frozenset(tokenize(title_s)),
+                frozenset(tokenize(content_s)),
             )
-        _CACHED_PAGE_LOOKUP = lookup
-    return _CACHED_PAGE_LOOKUP
+        bucket["page_lookup"] = lookup
+    return bucket["page_lookup"]  # type: ignore[return-value]
 
 
 def _enhanced_artifacts_ready(root: Path, hp: dict) -> bool:
@@ -370,24 +381,27 @@ def _combined_rrf_scores(
 def _light_feature_rerank(
     candidates: List[Tuple[int, float]],
     *,
-    page_lookup: Dict[int, Tuple[str, str, frozenset]],
+    page_lookup: Dict[int, PageLookupEntry],
     q_orig: str,
     q_tokens: Set[str],
     w_tov: float,
     w_tcov: float,
+    w_pcov: float,
     w_phrase: float,
     top_k: int,
 ) -> List[int]:
     q_lower = q_orig.lower().strip()
     final: Dict[int, float] = {}
+    empty: PageLookupEntry = ("", "", frozenset(), frozenset())
 
     for pid, base in candidates:
-        title, content_lower, title_tokens = page_lookup.get(
-            pid, ("", "", frozenset())
+        title, content_lower, title_tokens, content_tokens = page_lookup.get(
+            pid, empty
         )
         bonus = (
             w_tov * _title_overlap(q_tokens, title_tokens)
             + w_tcov * _token_coverage(q_tokens, title_tokens)
+            + w_pcov * _token_coverage(q_tokens, content_tokens)
         )
         if w_phrase > 0.0 and len(q_lower) >= 3:
             if q_lower in title.lower():
@@ -443,7 +457,7 @@ def _legacy_search_batch(
     artifacts_dir: Optional[Path],
 ) -> List[List[int]]:
     hp = load_hparams()
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = _resolve_root(artifacts_dir)
     page_ids = _get_page_ids(root)
     query_vectors = embed_queries(queries)
 
@@ -521,7 +535,7 @@ def _enhanced_search_batch(
     artifacts_dir: Optional[Path],
 ) -> List[List[int]]:
     hp = load_hparams()
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = _resolve_root(artifacts_dir)
     page_ids = _get_page_ids(root)
     query_vectors = embed_queries(queries)
 
@@ -554,8 +568,9 @@ def _enhanced_search_batch(
     w_page = float(hp_get(hp, "retrieve.page_bm25_rrf_weight", 1.0))
     w_tov = float(hp_get(hp, "retrieve.title_overlap_weight", 0.15))
     w_tcov = float(hp_get(hp, "retrieve.title_coverage_weight", 0.10))
+    w_pcov = float(hp_get(hp, "retrieve.page_coverage_weight", 0.0))
     w_phrase = float(hp_get(hp, "retrieve.phrase_bonus_weight", 0.12))
-    use_features = (w_tov + w_tcov + w_phrase) > 0.0
+    use_features = (w_tov + w_tcov + w_pcov + w_phrase) > 0.0
     page_lookup = _get_page_lookup(root) if use_features else None
 
     if mode == "brute":
@@ -677,6 +692,7 @@ def _enhanced_search_batch(
                     q_tokens=_query_token_set(q_orig),
                     w_tov=w_tov,
                     w_tcov=w_tcov,
+                    w_pcov=w_pcov,
                     w_phrase=w_phrase,
                     top_k=top_k,
                 )
@@ -710,7 +726,7 @@ def search_batch(
         return []
 
     hp = load_hparams()
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = _resolve_root(artifacts_dir)
 
     if _enhanced_artifacts_ready(root, hp):
         return _enhanced_search_batch(

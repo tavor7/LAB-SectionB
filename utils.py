@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional
 
 STUDENT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = STUDENT_ROOT / "data"
 ENTRIES_DIR = DATA_DIR / "Wikipedia Entries"
 PUBLIC_QUERIES_PATH = DATA_DIR / "public_queries.json"
 ARTIFACTS_DIR = STUDENT_ROOT / "artifacts"
+ARTIFACTS_SWEEP_DIR = STUDENT_ROOT / "artifacts_sweep"
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 K_EVAL = 10
@@ -75,6 +77,21 @@ def entry_text(record: Dict[str, Any]) -> str:
     return str(content).strip()
 
 
-def ensure_artifacts_dir() -> Path:
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    return ARTIFACTS_DIR
+def ensure_artifacts_dir(path: Optional[Path] = None) -> Path:
+    root = path or ARTIFACTS_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def resolve_artifacts_dir(override: Optional[Path | str] = None) -> Path:
+    """
+    Resolve artifact root for retrieval/build.
+
+    Priority: explicit override → ARTIFACTS_DIR env → default artifacts/.
+    """
+    if override is not None:
+        return Path(override).expanduser().resolve()
+    env = os.environ.get("ARTIFACTS_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return ARTIFACTS_DIR.resolve()

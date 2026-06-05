@@ -25,7 +25,7 @@ Expected output includes `mean_ndcg@10=...` and `query_phase_time=...`.
 | `embed.py` | MiniLM query/chunk embeddings |
 | `index.py` | Offline FAISS + BM25 artifact writers (not timed at grading) |
 | `lexical.py` | BM25 build/load/search (chunk, title, page indexes) |
-| `chunk.py` | Title + body word-window chunking (140/35 words) |
+| `chunk.py` | Title + body word-window chunking (`Title:/Content:` format) |
 | `config.py` / `hparams.json` | Hyperparameters |
 | `utils.py` | Paths, corpus helpers |
 | `eval.py` | NDCG metrics (course file — do not edit) |
@@ -91,6 +91,42 @@ python scripts/eval_public.py
 ```
 
 Prints `mean_ndcg@10` and `query_phase_time` (must stay under 60s for the full batch at grading).
+
+Optional artifact root (for sweep variants):
+
+```bash
+ARTIFACTS_DIR=artifacts_sweep/w240_o60 python scripts/eval_public.py
+# or
+python scripts/eval_public.py --artifacts-dir artifacts_sweep/w240_o60
+```
+
+### Chunk-size sweep (local)
+
+Builds persist under `artifacts_sweep/w{chunk}_o{overlap}/` with `manifest.json` (gitignored). Each variant is loadable for eval without overwriting others.
+
+**Active sweep grid** (`build --all-grid`): **400/100**, **320/80**, **240/60** (Title/Content format).
+
+**Legacy baseline** (not rebuilt): **140/35** in `artifacts/` — register with `sweep register`, still evaluable alongside sweep variants.
+
+```bash
+python scripts/sweep_chunk_sizes.py register    # register current artifacts/ as w140_o35
+python scripts/sweep_chunk_sizes.py list
+python scripts/sweep_chunk_sizes.py build --chunk-words 240   # one variant (long offline)
+python scripts/sweep_chunk_sizes.py build --all-grid          # builds 400, 320, 240 only
+python scripts/sweep_chunk_sizes.py register                # keep w140 (artifacts/) for eval
+python scripts/sweep_chunk_sizes.py eval --folds 5            # compare all complete variants
+```
+
+Pick winner by **median fold NDCG**, then copy that directory into `artifacts/` for submission.
+
+Full unattended pipeline (build all grid sizes → eval → ship):
+
+```bash
+nohup python -u scripts/sweep_chunk_sizes.py build --all-grid > build_sweep.log 2>&1 &
+nohup bash scripts/watch_sweep_finish.sh > watch_sweep.log 2>&1 &
+# or one shot after builds exist:
+python scripts/sweep_chunk_sizes.py run-all --ship
+```
 
 ### Dev tuning (small corpus)
 

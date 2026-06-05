@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import faiss  # type: ignore
 import numpy as np
 
-from chunk import Chunk, chunk_corpus
+from chunk import CHUNK_TEXT_FORMAT, Chunk, chunk_corpus
 from config import hp_get, load_hparams
 from embed import embed_texts
 from lexical import (
@@ -26,6 +26,7 @@ from utils import (
     ensure_artifacts_dir,
     list_entry_paths,
     load_public_queries,
+    resolve_artifacts_dir,
 )
 
 FAISS_INDEX_NAME = "faiss.index"
@@ -187,7 +188,7 @@ def build_index(
     For multi-chunk pipelines, store chunk metadata in index_meta.json and
     aggregate to page_id in retrieve.py.
     """
-    out_dir = artifacts_dir or ensure_artifacts_dir()
+    out_dir = ensure_artifacts_dir(resolve_artifacts_dir(artifacts_dir))
     hp = load_hparams()
 
     paths = list_entry_paths(entries_dir)
@@ -286,6 +287,7 @@ def build_index(
         "chunk_words": int(hp_get(hp, "chunking.chunk_words", 140)),
         "overlap_words": int(hp_get(hp, "chunking.overlap_words", 35)),
         "title_chunk": bool(hp_get(hp, "chunking.title_chunk", True)),
+        "chunk_text_format": CHUNK_TEXT_FORMAT,
         "dev_public": bool(dev_public),
         "sample_pages": int(sample_pages),
     }
@@ -497,6 +499,7 @@ def build_index(
             "chunk_words": int(hp_get(hp, "chunking.chunk_words", 140)),
             "overlap_words": int(hp_get(hp, "chunking.overlap_words", 35)),
             "title_chunk": bool(hp_get(hp, "chunking.title_chunk", True)),
+            "chunk_text_format": CHUNK_TEXT_FORMAT,
         },
         "chunk_ids": chunk_ids_list,
         "has_vectors_npy": (out_dir / VECTORS_NAME).is_file(),
@@ -530,7 +533,7 @@ def load_index(
     artifacts_dir: Optional[Path] = None,
 ) -> Tuple[faiss.Index, np.ndarray, Dict[str, Any]]:
     """Load FAISS index + page_ids mapping from artifacts/."""
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = resolve_artifacts_dir(artifacts_dir)
     index = faiss.read_index(str(root / FAISS_INDEX_NAME))
     page_ids = np.load(root / PAGE_IDS_NAME)
     meta = json.loads((root / META_NAME).read_text(encoding="utf-8"))
