@@ -9,6 +9,30 @@ Wikipedia **page retrieval** for Section B. The autograder calls `main.run(queri
 | `mean_ndcg@10` | **0.3011** |
 | `query_phase_time` | **~30s** (limit 60s) |
 
+### What lives where
+
+```
+PartB/
+├── main.py, retrieve.py, …     # grading entry points (autograder imports these)
+├── hparams.json, config.py     # hyperparameters
+├── artifacts/                  # submission index (Git LFS) — do not rebuild for grading
+├── data/public_queries.json    # public eval queries (in git)
+├── scripts/
+│   ├── check_submission.py     # smoke test
+│   ├── eval_public.py          # 50-query NDCG benchmark
+│   ├── build_index.py          # offline full index build
+│   └── dev/                    # local R&D only (not required for submission)
+│       ├── sweep_chunk_sizes.py
+│       ├── tune_retrieve.py
+│       ├── eval_dev.py
+│       └── artifact_registry.py
+├── logs/                       # build/sweep logs (gitignored)
+├── local/                      # handout PDF/ZIP copies (gitignored)
+└── artifacts_sweep/            # experimental indexes (gitignored)
+```
+
+**Grading only needs** the root Python modules, `artifacts/`, `data/public_queries.json`, and `scripts/check_submission.py` + `scripts/eval_public.py`. Everything under `scripts/dev/`, `logs/`, `local/`, and `artifacts_sweep/` is optional local work.
+
 ---
 
 ## Quick start (matches grading)
@@ -112,7 +136,7 @@ python scripts/build_index.py
 
 ```bash
 BUILD_DEV_PUBLIC=1 BUILD_DEV_NUM_QUERIES=10 BUILD_DEV_NEG_PAGES=3000 python -u scripts/build_index.py
-DEV_EVAL_NUM_QUERIES=10 python -u eval_dev.py
+DEV_EVAL_NUM_QUERIES=10 python -u scripts/dev/eval_dev.py
 ```
 
 ### 3. Optional: chunk-size sweep (local R&D only)
@@ -120,13 +144,13 @@ DEV_EVAL_NUM_QUERIES=10 python -u eval_dev.py
 Experimental indexes live in **`artifacts_sweep/w{chunk}_o{overlap}/`** (gitignored). Does **not** ship with submission unless copied into `artifacts/`.
 
 ```bash
-python scripts/sweep_chunk_sizes.py list
-python scripts/sweep_chunk_sizes.py build --chunk-words 400   # one variant
-python scripts/sweep_chunk_sizes.py eval --folds 5              # median-fold comparison
+python scripts/dev/sweep_chunk_sizes.py list
+python scripts/dev/sweep_chunk_sizes.py build --chunk-words 400   # one variant
+python scripts/dev/sweep_chunk_sizes.py eval --folds 5              # median-fold comparison
 python scripts/eval_public.py --artifacts-dir artifacts_sweep/w400_o100
 ```
 
-We tested **400, 320, 240** vs **140**; **140/35** remained best on median-fold NDCG for the legacy index. Sweep tooling: `artifact_registry.py`, `scripts/sweep_chunk_sizes.py`, `scripts/tune_retrieve.py`.
+We tested **400, 320, 240** vs **140**; **140/35** remained best on median-fold NDCG for the legacy index. Sweep tooling lives under **`scripts/dev/`**.
 
 ---
 
@@ -172,15 +196,14 @@ git log --oneline   # commits from both partners (see AUTHORS.md)
 | `index.py` | Offline FAISS + BM25 writers |
 | `lexical.py` | BM25 build/load/search |
 | `chunk.py` | Word-window chunking |
-| `artifact_registry.py` | Sweep manifest helpers (local dev) |
 | `config.py` / `hparams.json` | Hyperparameters |
 | `scripts/check_submission.py` | Grading readiness smoke test |
 | `scripts/eval_public.py` | 50 public queries, NDCG@10 |
 | `scripts/build_index.py` | Offline full build |
-| `scripts/sweep_chunk_sizes.py` | Chunk sweep build/eval/ship |
-| `scripts/tune_retrieve.py` | Retrieve hparam grid search (local) |
+| `scripts/dev/` | Chunk sweep, hparam tuning, fast eval (**local only**) |
 | `artifacts/` | **Submission index** (Git LFS) |
-| `artifacts_sweep/` | Local experiments (**gitignored**) |
+| `artifacts_sweep/` | Local experiment indexes (**gitignored**) |
+| `logs/`, `local/` | Logs and handout copies (**gitignored**) |
 
 ---
 

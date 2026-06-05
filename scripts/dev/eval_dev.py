@@ -1,12 +1,13 @@
-"""Fast dev evaluation on a small subset of public queries.
-
-This file is optional; it exists to speed up iteration locally without
-modifying the provided read-only scripts.
-"""
+"""Fast dev evaluation on a small subset of public queries."""
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
+
+_STUDENT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_STUDENT_ROOT))
 
 from eval import evaluate_run
 from main import run
@@ -33,4 +34,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

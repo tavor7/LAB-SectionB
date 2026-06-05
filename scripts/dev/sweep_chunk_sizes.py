@@ -10,8 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Sequence, Set, Tuple
 
-STUDENT_ROOT = Path(__file__).resolve().parent.parent
+_DEV_DIR = Path(__file__).resolve().parent
+STUDENT_ROOT = _DEV_DIR.parent.parent
 sys.path.insert(0, str(STUDENT_ROOT))
+sys.path.insert(0, str(_DEV_DIR))
 
 from artifact_registry import (
     ARTIFACTS_SWEEP_DIR,
