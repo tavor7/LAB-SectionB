@@ -20,6 +20,7 @@ env/
 
 # Build logs (offline index runs)
 build_full*.log
+build_sweep.log
 *.log
 
 # Full Wikipedia corpus is in the course handout (not in git)
@@ -32,6 +33,9 @@ Project A.pdf
 
 # Manual index backups (do not commit duplicate artifact trees)
 artifacts_backup*/
+
+# Chunk-size sweep experiments (copy winner into artifacts/ for submit)
+artifacts_sweep/
 
 # Intermediate build shards (final faiss/BM25/page_ids are enough for grading)
 artifacts/shards/

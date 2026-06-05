@@ -6,13 +6,19 @@ Query embedding + retrieval must complete within the time limit (GPU available).
 """
 from __future__ import annotations
 
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from index import build_index
 from retrieve import search_batch
+from utils import resolve_artifacts_dir
 
 
-def run(queries: List[str]) -> List[List[int]]:
+def run(
+    queries: List[str],
+    *,
+    artifacts_dir: Optional[Path | str] = None,
+) -> List[List[int]]:
     """
     Rank corpus pages for each query.
 
@@ -20,6 +26,9 @@ def run(queries: List[str]) -> List[List[int]]:
     ----------
     queries : list[str]
         Batch of query strings (e.g. 50 hidden queries at grading time).
+    artifacts_dir : path, optional
+        Override artifact root (env ARTIFACTS_DIR also supported). Grading uses
+        default artifacts/ when unset.
 
     Returns
     -------
@@ -27,12 +36,14 @@ def run(queries: List[str]) -> List[List[int]]:
         One ranked list of page_id per query (most relevant first).
         Only the first 10 IDs per list are scored.
     """
-    return search_batch(queries)
+    root = resolve_artifacts_dir(artifacts_dir) if artifacts_dir is not None else None
+    return search_batch(queries, artifacts_dir=root)
 
 
-def build_offline_index() -> None:
+def build_offline_index(*, artifacts_dir: Optional[Path | str] = None) -> None:
     """Run once locally to create artifacts/ (not timed at grading)."""
-    build_index()
+    root = resolve_artifacts_dir(artifacts_dir) if artifacts_dir is not None else None
+    build_index(artifacts_dir=root)
 
 
 if __name__ == "__main__":

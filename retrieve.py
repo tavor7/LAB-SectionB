@@ -13,7 +13,7 @@ from embed import embed_queries
 from index import load_index
 from lexical import has_bm25_index, load_bm25_index, tokenize
 from query_expand import query_versions
-from utils import ARTIFACTS_DIR, K_EVAL
+from utils import ARTIFACTS_DIR, K_EVAL, resolve_artifacts_dir
 
 try:
     from sentence_transformers import CrossEncoder
@@ -36,6 +36,24 @@ _CACHED_CROSS_ENCODER = None
 _CACHED_PAGE_LOOKUP: Optional[Dict[int, Tuple[str, str]]] = None
 
 
+def clear_retrieve_cache() -> None:
+    """Reset loaded indexes (needed when switching artifacts_dir in one process)."""
+    global _CACHED_PAGE_IDS, _CACHED_FAISS_INDEX, _CACHED_VECTORS
+    global _CACHED_PAGE_DENSE_PAGE_IDS, _CACHED_PAGE_DENSE_VECTORS
+    global _CACHED_BM25_CHUNK, _CACHED_BM25_TITLE, _CACHED_BM25_PAGE
+    global _CACHED_CROSS_ENCODER, _CACHED_PAGE_LOOKUP
+    _CACHED_PAGE_IDS = None
+    _CACHED_FAISS_INDEX = None
+    _CACHED_VECTORS = None
+    _CACHED_PAGE_DENSE_PAGE_IDS = None
+    _CACHED_PAGE_DENSE_VECTORS = None
+    _CACHED_BM25_CHUNK = None
+    _CACHED_BM25_TITLE = None
+    _CACHED_BM25_PAGE = None
+    _CACHED_CROSS_ENCODER = None
+    _CACHED_PAGE_LOOKUP = None
+
+
 def _get_page_ids(root: Path) -> np.ndarray:
     global _CACHED_PAGE_IDS
     if _CACHED_PAGE_IDS is None:
@@ -45,7 +63,7 @@ def _get_page_ids(root: Path) -> np.ndarray:
 
 def _get_bm25(prefix: str, artifacts_dir: Optional[Path]):
     global _CACHED_BM25_CHUNK, _CACHED_BM25_TITLE, _CACHED_BM25_PAGE
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = resolve_artifacts_dir(artifacts_dir)
     if prefix == "chunk":
         if _CACHED_BM25_CHUNK is None:
             _CACHED_BM25_CHUNK = load_bm25_index(root, prefix="chunk")
@@ -192,7 +210,7 @@ def _simple_search_batch(
     artifacts_dir: Optional[Path],
 ) -> List[List[int]]:
     hp = load_hparams()
-    root = artifacts_dir or ARTIFACTS_DIR
+    root = resolve_artifacts_dir(artifacts_dir)
 
     page_ids = _get_page_ids(root)
     query_vectors = embed_queries(queries)

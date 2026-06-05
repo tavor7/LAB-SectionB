@@ -7,12 +7,19 @@ from typing import Any, Dict, List
 from config import hp_get, load_hparams
 from utils import entry_text
 
+CHUNK_TEXT_FORMAT = "title_content_v1"
+
 
 @dataclass
 class Chunk:
     page_id: int
     chunk_id: int
     text: str
+
+
+def format_chunk_text(title: str, content: str) -> str:
+    """Shared dense/BM25 chunk wrapper (matches page-level BM25 in index.py)."""
+    return f"Title: {title}\nContent: {content}"
 
 
 def _word_chunks(
@@ -44,7 +51,7 @@ def chunk_entry(record: Dict[str, Any]) -> List[Chunk]:
     """
     Split one corpus entry into retrieval units.
 
-    Default: title-only chunk + fixed-size word chunks with overlap.
+    Title chunk + body word windows wrapped as Title:/Content: blocks.
     """
     page_id = int(record["page_id"])
     title = str(record.get("title", "")).strip()
@@ -57,20 +64,34 @@ def chunk_entry(record: Dict[str, Any]) -> List[Chunk]:
 
     chunks: List[Chunk] = []
     if title_chunk_enabled and title:
-        chunks.append(Chunk(page_id=page_id, chunk_id=-1, text=title))
+        chunks.append(
+            Chunk(
+                page_id=page_id,
+                chunk_id=-1,
+                text=format_chunk_text(title, title),
+            )
+        )
 
     content_chunks = _word_chunks(
         content, chunk_words=chunk_words, overlap_words=overlap_words
     )
     for i, c in enumerate(content_chunks):
+        body = c.strip()
         if title:
-            text = f"{title}\n\n{c}".strip()
+            text = format_chunk_text(title, body)
         else:
-            text = c.strip()
+            text = format_chunk_text("", body) if body else body
         chunks.append(Chunk(page_id=page_id, chunk_id=i, text=text))
 
     if not chunks:
-        chunks = [Chunk(page_id=page_id, chunk_id=0, text=entry_text(record))]
+        fallback = entry_text(record)
+        chunks = [
+            Chunk(
+                page_id=page_id,
+                chunk_id=0,
+                text=format_chunk_text(title, fallback) if title else fallback,
+            )
+        ]
     return chunks
 
 
