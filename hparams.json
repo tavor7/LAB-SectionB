@@ -1,8 +1,8 @@
 {
   "seed": 13,
   "chunking": {
-    "chunk_words": 400,
-    "overlap_words": 100,
+    "chunk_words": 140,
+    "overlap_words": 35,
     "title_chunk": true
   },
   "faiss_hnsw": {
