@@ -1,4 +1,3 @@
-
 """Query-time hybrid retrieval (Hyper-optimized Cross-Encoder for CPU Execution)."""
 from __future__ import annotations
 
@@ -17,8 +16,6 @@ from utils import ARTIFACTS_DIR, K_EVAL
 
 try:
     from sentence_transformers import CrossEncoder
-    import torch
-    torch.set_num_threads(min(os.cpu_count() or 4, 8))
 except ImportError:  # pragma: no cover
     CrossEncoder = None  # type: ignore
 
@@ -147,7 +144,6 @@ def _dense_hnsw_rankings(
     ef_cap: int,
     agg: str,
 ) -> List[List[int]]:
-    # אופטימיזציה 2: העמקת החיפוש בגרף לקבלת מועמדים איכותיים יותר
     index.hnsw.efSearch = max(512, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
@@ -199,19 +195,17 @@ def _simple_search_batch(
 
     candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.candidate_multiplier", 50))), top_k)
     bm25_candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.bm25_candidate_multiplier", 50))), top_k)
-    
-    # אופטימיזציה 3: משחק עדין בין 12 ל-14 (אפשר לנסות את שניהם)
-    rerank_cap = 12 
-    
+    rerank_cap = 12
+
     use_bm25 = bool(hp_get(hp, "retrieve.use_bm25", True))
     use_title = bool(hp_get(hp, "retrieve.use_title_bm25", True)) and has_bm25_index(root, "title")
     use_page = bool(hp_get(hp, "retrieve.use_page_bm25", True)) and has_bm25_index(root, "page")
     use_expansion = bool(hp_get(hp, "retrieve.use_query_expansion", True))
-    
+
     model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     cross_encoder_model = _get_cross_encoder(model_name)
     page_lookup = _get_page_lookup(root)
-        
+
     rrf_k = int(hp_get(hp, "retrieve.rrf_k", 15))
     ef_min = int(hp_get(hp, "faiss_hnsw.ef_search_min", 128))
     ef_cap = int(hp_get(hp, "faiss_hnsw.ef_search_cap", 256))
@@ -232,7 +226,7 @@ def _simple_search_batch(
 
     query_pools: List[List[int]] = []
     orig_queries_processed: List[str] = []
-    
+
     for i, query in enumerate(queries):
         q_orig, q_kw = query_versions(query, use_expansion=use_expansion)
         orig_queries_processed.append(q_orig)
@@ -255,14 +249,13 @@ def _simple_search_batch(
 
     all_pairs: List[Tuple[str, str]] = []
     pool_sizes: List[int] = []
-    
+
     for q_orig, pool in zip(orig_queries_processed, query_pools):
         pool_sizes.append(len(pool))
         for pid in pool:
             title, content_lower = page_lookup.get(pid, ("", ""))
             words = content_lower.split()
-            # חזרה מדויקת לפורמט ה-120 מילים הבטוח שהביא 0.2838
-            snippet = " ".join(words[:120]) 
+            snippet = " ".join(words[:120])
             summary = f"Title: {title}. Context: {snippet}" if title else snippet
             all_pairs.append((q_orig, summary))
 
@@ -270,15 +263,13 @@ def _simple_search_batch(
 
     results: List[List[int]] = []
     score_idx = 0
-    
+
     for pool, p_size in zip(query_pools, pool_sizes):
         if p_size == 0:
             results.append([])
             continue
-        
-        sub_scores = all_scores[score_idx : score_idx + p_size]
+        sub_scores = all_scores[score_idx: score_idx + p_size]
         score_idx += p_size
-        
         ranked = sorted(zip(pool, sub_scores), key=lambda x: x[1], reverse=True)
         results.append([pid for pid, _ in ranked[:top_k]])
 
