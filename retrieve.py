@@ -1,8 +1,11 @@
 
-"""Query-time hybrid retrieval (Hyper-optimized Cross-Encoder for CPU Execution)."""
 from __future__ import annotations
 
 import os
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
+os.environ["OPENBLAS_NUM_THREADS"] = "4"
+
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -18,17 +21,14 @@ from utils import ARTIFACTS_DIR, K_EVAL, resolve_artifacts_dir
 try:
     from sentence_transformers import CrossEncoder
     import torch
-    torch.set_num_threads(min(os.cpu_count() or 4, 8))
-except ImportError:  # pragma: no cover
-    CrossEncoder = None  # type: ignore
+    torch.set_num_threads(4)
+except ImportError: 
+    CrossEncoder = None  
 
 PAGE_FEATURES_NAME = "page_features.npz"
 
 _CACHED_PAGE_IDS = None
 _CACHED_FAISS_INDEX = None
-_CACHED_VECTORS = None
-_CACHED_PAGE_DENSE_PAGE_IDS = None
-_CACHED_PAGE_DENSE_VECTORS = None
 _CACHED_BM25_CHUNK = None
 _CACHED_BM25_TITLE = None
 _CACHED_BM25_PAGE = None
@@ -38,15 +38,11 @@ _CACHED_PAGE_LOOKUP: Optional[Dict[int, Tuple[str, str]]] = None
 
 def clear_retrieve_cache() -> None:
     """Reset loaded indexes (needed when switching artifacts_dir in one process)."""
-    global _CACHED_PAGE_IDS, _CACHED_FAISS_INDEX, _CACHED_VECTORS
-    global _CACHED_PAGE_DENSE_PAGE_IDS, _CACHED_PAGE_DENSE_VECTORS
+    global _CACHED_PAGE_IDS, _CACHED_FAISS_INDEX
     global _CACHED_BM25_CHUNK, _CACHED_BM25_TITLE, _CACHED_BM25_PAGE
     global _CACHED_CROSS_ENCODER, _CACHED_PAGE_LOOKUP
     _CACHED_PAGE_IDS = None
     _CACHED_FAISS_INDEX = None
-    _CACHED_VECTORS = None
-    _CACHED_PAGE_DENSE_PAGE_IDS = None
-    _CACHED_PAGE_DENSE_VECTORS = None
     _CACHED_BM25_CHUNK = None
     _CACHED_BM25_TITLE = None
     _CACHED_BM25_PAGE = None
@@ -123,13 +119,7 @@ def _page_ranking_from_chunk_scores(
     page_scores: Dict[int, float] = {}
     for pid, scores in page_chunks.items():
         scores.sort(reverse=True)
-        if agg == "sum":
-            page_scores[pid] = float(sum(scores))
-        elif agg == "mean_top3":
-            page_scores[pid] = float(np.mean(scores[:3]))
-        elif agg == "hybrid":
-            page_scores[pid] = float(scores[0] + 0.2 * sum(scores[1:]))
-        elif agg == "max_plus_mean_top3":
+        if agg == "max_plus_mean_top3":
             page_scores[pid] = float(0.5 * scores[0] + 0.5 * np.mean(scores[:3]))
         else:
             page_scores[pid] = float(scores[0])
@@ -138,13 +128,13 @@ def _page_ranking_from_chunk_scores(
     return [pid for pid, _ in items]
 
 
-def _rrf_fuse(
+def _rrf_fuse_with_scores(
     rankings: List[List[int]],
     *,
     rrf_k: int,
     top_k: int,
     weights: Optional[List[float]] = None,
-) -> List[int]:
+) -> List[Tuple[int, float]]:
     scores: Dict[int, float] = {}
     if weights is None:
         weights = [1.0] * len(rankings)
@@ -152,7 +142,7 @@ def _rrf_fuse(
         for rank, pid in enumerate(ranking):
             scores[pid] = scores.get(pid, 0.0) + weight / (rrf_k + rank + 1)
     fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return [pid for pid, _ in fused[:top_k]]
+    return fused[:top_k]
 
 
 def _dense_hnsw_rankings(
@@ -165,7 +155,6 @@ def _dense_hnsw_rankings(
     ef_cap: int,
     agg: str,
 ) -> List[List[int]]:
-    # אופטימיזציה 2: העמקת החיפוש בגרף לקבלת מועמדים איכותיים יותר
     index.hnsw.efSearch = max(512, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
@@ -203,6 +192,26 @@ def _bm25_expanded_page_ranking(
     return _bm25_page_level_ranking(bm25_index, query, candidate_k=candidate_k)
 
 
+def _get_smart_snippet(content_lower: str, query_tokens: List[str], window_size: int = 120) -> str:
+    """מוצא את החלון הטקסטואלי שמכיל את כמות ההתאמות הגבוהה ביותר לשאילתה."""
+    words = content_lower.split()
+    if len(words) <= window_size:
+        return " ".join(words)
+    
+    q_set = set(query_tokens)
+    best_start = 0
+    max_matches = -1
+    
+    for start_idx in range(0, len(words) - window_size + 1, 20):
+        window = words[start_idx : start_idx + window_size]
+        matches = sum(1 for w in window if w in q_set)
+        if matches > max_matches:
+            max_matches = matches
+            best_start = start_idx
+            
+    return " ".join(words[best_start : best_start + window_size])
+
+
 def _simple_search_batch(
     queries: List[str],
     *,
@@ -218,7 +227,6 @@ def _simple_search_batch(
     candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.candidate_multiplier", 50))), top_k)
     bm25_candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.bm25_candidate_multiplier", 50))), top_k)
     
-    # אופטימיזציה 3: משחק עדין בין 12 ל-14 (אפשר לנסות את שניהם)
     rerank_cap = 12 
     
     use_bm25 = bool(hp_get(hp, "retrieve.use_bm25", True))
@@ -248,12 +256,15 @@ def _simple_search_batch(
     bm25_title = _get_bm25("title", artifacts_dir) if use_bm25 and use_title else None
     bm25_page = _get_bm25("page", artifacts_dir) if use_bm25 and use_page else None
 
-    query_pools: List[List[int]] = []
-    orig_queries_processed: List[str] = []
+    query_pools_with_scores: List[List[Tuple[int, float]]] = []
+    enhanced_queries: List[str] = []
+    query_token_lists: List[List[str]] = []
     
     for i, query in enumerate(queries):
         q_orig, q_kw = query_versions(query, use_expansion=use_expansion)
-        orig_queries_processed.append(q_orig)
+        q_enhanced = _merged_bm25_query(q_orig, q_kw)
+        enhanced_queries.append(q_enhanced)
+        query_token_lists.append(tokenize(q_enhanced))
 
         rankings: List[List[int]] = [dense_rankings[i]]
         weights: List[float] = [w_dense]
@@ -268,36 +279,41 @@ def _simple_search_batch(
             rankings.append(_bm25_expanded_page_ranking(bm25_page, q_orig, q_kw, candidate_k=bm25_candidate_k))
             weights.append(w_page)
 
-        pool = _rrf_fuse(rankings, rrf_k=rrf_k, top_k=rerank_cap, weights=weights)
-        query_pools.append(pool)
+        pool_with_score = _rrf_fuse_with_scores(rankings, rrf_k=rrf_k, top_k=rerank_cap, weights=weights)
+        query_pools_with_scores.append(pool_with_score)
 
     all_pairs: List[Tuple[str, str]] = []
     pool_sizes: List[int] = []
     
-    for q_orig, pool in zip(orig_queries_processed, query_pools):
-        pool_sizes.append(len(pool))
-        for pid in pool:
+    for q_enhanced, pool_with_score, q_tokens in zip(enhanced_queries, query_pools_with_scores, query_token_lists):
+        pool_sizes.append(len(pool_with_score))
+        for pid, _ in pool_with_score:
             title, content_lower = page_lookup.get(pid, ("", ""))
-            words = content_lower.split()
-            # חזרה מדויקת לפורמט ה-120 מילים הבטוח שהביא 0.2838
-            snippet = " ".join(words[:120]) 
+            # שימוש במנגנון החלון החכם למציאת ה-Context הרלוונטי ביותר
+            snippet = _get_smart_snippet(content_lower, q_tokens, window_size=120)
             summary = f"Title: {title}. Context: {snippet}" if title else snippet
-            all_pairs.append((q_orig, summary))
+            all_pairs.append((q_enhanced, summary))
 
     all_scores = cross_encoder_model.predict(all_pairs, batch_size=128, show_progress_bar=False) if all_pairs else []
 
     results: List[List[int]] = []
     score_idx = 0
     
-    for pool, p_size in zip(query_pools, pool_sizes):
+    for pool_with_score, p_size in zip(query_pools_with_scores, pool_sizes):
         if p_size == 0:
             results.append([])
             continue
         
-        sub_scores = all_scores[score_idx : score_idx + p_size]
+        sub_cross_scores = all_scores[score_idx : score_idx + p_size]
         score_idx += p_size
         
-        ranked = sorted(zip(pool, sub_scores), key=lambda x: x[1], reverse=True)
+        final_ranked_pool = []
+        for idx, (pid, rrf_score) in enumerate(pool_with_score):
+            # החזרת השליטה ל-Cross-Encoder. ה-RRF משמש רק כמשקולת זעירה (0.001) לשבירת שוויון
+            combined_score = float(sub_cross_scores[idx]) + (0.001 * float(rrf_score))
+            final_ranked_pool.append((pid, combined_score))
+        
+        ranked = sorted(final_ranked_pool, key=lambda x: x[1], reverse=True)
         results.append([pid for pid, _ in ranked[:top_k]])
 
     return results
