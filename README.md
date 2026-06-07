@@ -6,8 +6,8 @@ Wikipedia **page retrieval** for Section B. The autograder calls `main.run(queri
 
 | Metric | Value |
 |--------|-------|
-| `mean_ndcg@10` | **0.3011** |
-| `query_phase_time` | **~30s** (limit 60s) |
+| `mean_ndcg@10` | **0.3181** |
+| `query_phase_time` | **~27s** (limit 60s) |
 
 ### What lives where
 
@@ -56,9 +56,10 @@ python scripts/eval_public.py             # mean NDCG@10 + query time
 | 1. Baseline hybrid | Dense (MiniLM) + single BM25 chunk, RRF | ~0.236 |
 | 2. Multi-index | + BM25 title & page indexes, tuned RRF weights | ~0.252–0.255 |
 | 3. Chunk experiments | Tested 400/320/240 vs 140-word chunks (local sweep) | 140 won on fold metrics |
-| 4. **Partner merge** | Cross-encoder rerank on RRF candidate pool (`mgalamidi/partb`) | **~0.301** |
+| 4. Cross-encoder rerank | Batched CE on RRF pool (`mgalamidi/partb`) | ~0.301 |
+| 5. **Smart snippet window** | Query-aligned 120-word context + RRF tie-break | **~0.318** |
 
-**Submission ships stage 4 code + stage 2 index** (`artifacts/` at 140/35 chunks). Chunk-size sweep artifacts stay local under `artifacts_sweep/` (gitignored).
+**Submission ships stage 5 code + stage 2 index** (`artifacts/` at 140/35 chunks). Chunk-size sweep artifacts stay local under `artifacts_sweep/` (gitignored).
 
 ### Partner contribution (Maayan Galamidi)
 
@@ -66,7 +67,9 @@ Merged from branch `mgalamidi/partb`:
 
 - **`retrieve.py`**: batched **cross-encoder reranking** (`cross-encoder/ms-marco-MiniLM-L-6-v2`) over a small RRF candidate pool (~12 pages/query).
 - **Global batching** across all queries in one `predict()` call for CPU efficiency.
-- Document text for reranking: `Title: {title}. Context: {first 120 words of page}`.
+- **Smart snippet windowing** — for each candidate page, pick the 120-word span with the most query-token overlap (step 20 words) instead of always using the page start.
+- **Final score** — `cross_encoder_score + 0.001 × rrf_score` (RRF only breaks ties).
+- Cross-encoder input: expanded query + `Title: {title}. Context: {snippet}`.
 - **`hparams.json`**: retrieve fusion weights tuned for the cross-encoder pipeline.
 
 Recall still comes from the **multi-index RRF** stack built by Amit; the cross-encoder **reorders** the top candidates.
@@ -85,8 +88,10 @@ flowchart TD
   Agg --> RRF[Weighted RRF fuse per query]
   Expand --> RRF
   RRF --> Pool["Top ~12 page candidates"]
-  Pool --> CE[Cross-encoder ms-marco-MiniLM-L-6-v2]
-  CE --> Top10[Top 10 page_ids]
+  Pool --> Snip["Smart 120-word snippet per page"]
+  Snip --> CE[Cross-encoder ms-marco-MiniLM-L-6-v2]
+  CE --> Tie["CE score + 0.001 × RRF tie-break"]
+  Tie --> Top10[Top 10 page_ids]
 ```
 
 **Per query:**
@@ -95,8 +100,9 @@ flowchart TD
 2. **BM25 chunk** — original query on 140/35 word chunks.
 3. **BM25 title** — page-level title index (query expansion: original + keyword).
 4. **BM25 page** — full-page index (same expansion).
-5. **Weighted RRF** — fuse the four rankings (`rrf_k=15`; weights in `hparams.json`).
-6. **Cross-encoder rerank** — score each `(query, title+snippet)` pair; return top 10 `page_id`s.
+5. **Weighted RRF** — fuse the four rankings (`rrf_k=15`; weights in `hparams.json`); keep top ~12 candidates with RRF scores.
+6. **Smart snippet** — for each candidate, slide a 120-word window (step 20) and pick the span with the most query-token matches.
+7. **Cross-encoder rerank** — score each `(expanded_query, title+snippet)` pair; final score = CE + `0.001 × rrf_score`; return top 10 `page_id`s.
 
 If extended artifacts (`page_features.npz`, prefixed BM25) are missing, `retrieve.py` falls back to legacy dense + single BM25 RRF (no cross-encoder path).
 
@@ -167,7 +173,7 @@ python scripts/check_submission.py
 
 # 3. Public eval (grading-style)
 python scripts/eval_public.py
-# Expect: mean_ndcg@10 ≈ 0.30, query_phase_time < 60s
+# Expect: mean_ndcg@10 ≈ 0.32, query_phase_time < 60s
 
 # 4. Git hygiene
 git status          # no accidental artifacts_sweep/ or *.log staged
@@ -224,7 +230,7 @@ git log --oneline   # commits from both partners (see AUTHORS.md)
 | `page_bm25_rrf_weight` | 0.86 | |
 | `use_query_expansion` | true | Page/title BM25 |
 
-Cross-encoder pool size is fixed in `retrieve.py` (`rerank_cap ≈ 12`).
+Cross-encoder pool size is fixed in `retrieve.py` (`rerank_cap = 12`). Snippet window size is 120 words (step 20). RRF tie-break weight is `0.001`.
 
 ---
 
