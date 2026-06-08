@@ -1,10 +1,12 @@
 
+"""Query-time hybrid retrieval (Precision-Optimized Cross-Encoder with Smart Windowing)."""
 from __future__ import annotations
 
 import os
 os.environ["OMP_NUM_THREADS"] = "4"
 os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["OPENBLAS_NUM_THREADS"] = "4"
+os.environ["TORCH_NUM_THREADS"] = "4" 
 
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -20,10 +22,8 @@ from utils import ARTIFACTS_DIR, K_EVAL, resolve_artifacts_dir
 
 try:
     from sentence_transformers import CrossEncoder
-    import torch
-    torch.set_num_threads(4)
-except ImportError: 
-    CrossEncoder = None  
+except ImportError:  # pragma: no cover
+    CrossEncoder = None  # type: ignore
 
 PAGE_FEATURES_NAME = "page_features.npz"
 
@@ -193,7 +193,6 @@ def _bm25_expanded_page_ranking(
 
 
 def _get_smart_snippet(content_lower: str, query_tokens: List[str], window_size: int = 120) -> str:
-    """מוצא את החלון הטקסטואלי שמכיל את כמות ההתאמות הגבוהה ביותר לשאילתה."""
     words = content_lower.split()
     if len(words) <= window_size:
         return " ".join(words)
@@ -289,7 +288,6 @@ def _simple_search_batch(
         pool_sizes.append(len(pool_with_score))
         for pid, _ in pool_with_score:
             title, content_lower = page_lookup.get(pid, ("", ""))
-            # שימוש במנגנון החלון החכם למציאת ה-Context הרלוונטי ביותר
             snippet = _get_smart_snippet(content_lower, q_tokens, window_size=120)
             summary = f"Title: {title}. Context: {snippet}" if title else snippet
             all_pairs.append((q_enhanced, summary))
@@ -309,7 +307,6 @@ def _simple_search_batch(
         
         final_ranked_pool = []
         for idx, (pid, rrf_score) in enumerate(pool_with_score):
-            # החזרת השליטה ל-Cross-Encoder. ה-RRF משמש רק כמשקולת זעירה (0.001) לשבירת שוויון
             combined_score = float(sub_cross_scores[idx]) + (0.001 * float(rrf_score))
             final_ranked_pool.append((pid, combined_score))
         
