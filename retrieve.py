@@ -1,5 +1,5 @@
 
-"""Query-time hybrid retrieval (Precision-Optimized Cross-Encoder with Smart Windowing)."""
+"""Query-time retrieval (timed portion includes query embedding)."""
 from __future__ import annotations
 
 import os
@@ -120,7 +120,7 @@ def _page_ranking_from_chunk_scores(
     for pid, scores in page_chunks.items():
         scores.sort(reverse=True)
         if agg == "max_plus_mean_top3":
-            page_scores[pid] = float(0.5 * scores[0] + 0.5 * np.mean(scores[:3]))
+            page_scores[pid] = float(0.2 * scores[0] + 0.8 * np.mean(scores[:3]))
         else:
             page_scores[pid] = float(scores[0])
 
@@ -307,7 +307,7 @@ def _simple_search_batch(
         
         final_ranked_pool = []
         for idx, (pid, rrf_score) in enumerate(pool_with_score):
-            combined_score = float(sub_cross_scores[idx]) + (0.001 * float(rrf_score))
+            combined_score = float(sub_cross_scores[idx]) + (3 * float(rrf_score))
             final_ranked_pool.append((pid, combined_score))
         
         ranked = sorted(final_ranked_pool, key=lambda x: x[1], reverse=True)
