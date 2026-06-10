@@ -1,50 +1,50 @@
 {
   "seed": 13,
+
   "chunking": {
     "chunk_words": 400,
     "overlap_words": 100,
     "title_chunk": true
   },
+
   "faiss_hnsw": {
     "M": 32,
     "ef_construction": 200,
     "ef_search_min": 128,
     "ef_search_cap": 256
   },
+
   "bm25": {
     "k1": 1.5,
     "b": 0.75
   },
+
   "retrieve": {
     "mode": "hnsw",
     "save_vectors": true,
+
     "use_bm25": true,
+    "use_query_expansion": true,
+    "use_title_bm25": true,
+    "use_page_bm25": true,
+
     "candidate_multiplier": 400,
     "bm25_candidate_multiplier": 400,
-    "rerank_candidate_cap": 30,
-    "rrf_score_cap": 500,
+    "rerank_candidate_cap": 12,
+
     "page_aggregation": "max_plus_mean_top3",
-    "rrf_k": 15,
+    "rrf_k": 20,
+
     "dense_rrf_weight": 1.0,
     "bm25_chunk_rrf_weight": 1.03,
     "title_bm25_rrf_weight": 0.35,
     "page_bm25_rrf_weight": 0.86,
-    "title_overlap_weight": 0.02,
-    "title_coverage_weight": 0,
-    "page_coverage_weight": 0.0,
-    "phrase_bonus_weight": 0,
-    "use_query_expansion": true,
-    "expand_chunk_bm25": false,
-    "use_dual_query_rrf": false,
-    "use_title_bm25": true,
-    "use_page_bm25": true,
-    "bm25_rrf_weight": 1.0
+
+    "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "cross_encoder_rrf_weight": 3.0
+    
   },
-  "dev_build": {
-    "neg_pages": 3000,
-    "num_queries": 10,
-    "query_seed": 0
-  },
+
   "build": {
     "embed_batch_size": 64,
     "checkpoint_pages_per_shard": 200
