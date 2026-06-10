@@ -226,14 +226,21 @@ def _simple_search_batch(
     candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.candidate_multiplier", 50))), top_k)
     bm25_candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.bm25_candidate_multiplier", 50))), top_k)
     
-    rerank_cap = 12 
+    rerank_cap = int(
+    hp_get(hp, "retrieve.rerank_candidate_cap", 12)
+)
     
     use_bm25 = bool(hp_get(hp, "retrieve.use_bm25", True))
     use_title = bool(hp_get(hp, "retrieve.use_title_bm25", True)) and has_bm25_index(root, "title")
     use_page = bool(hp_get(hp, "retrieve.use_page_bm25", True)) and has_bm25_index(root, "page")
     use_expansion = bool(hp_get(hp, "retrieve.use_query_expansion", True))
     
-    model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    model_name = str(
+    hp_get(
+        hp,
+        "retrieve.cross_encoder_model",
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    ))
     cross_encoder_model = _get_cross_encoder(model_name)
     page_lookup = _get_page_lookup(root)
         
@@ -246,6 +253,8 @@ def _simple_search_batch(
     w_chunk = float(hp_get(hp, "retrieve.bm25_chunk_rrf_weight", 1.2))
     w_title = float(hp_get(hp, "retrieve.title_bm25_rrf_weight", 1.8))
     w_page = float(hp_get(hp, "retrieve.page_bm25_rrf_weight", 1.0))
+    cross_encoder_rrf_weight = float(
+    hp_get(hp, "retrieve.cross_encoder_rrf_weight", 3.0))
 
     dense_rankings = _dense_hnsw_rankings(
         query_vectors, page_ids, _get_faiss_index(root), candidate_k=candidate_k, ef_min=ef_min, ef_cap=ef_cap, agg=agg
@@ -307,7 +316,7 @@ def _simple_search_batch(
         
         final_ranked_pool = []
         for idx, (pid, rrf_score) in enumerate(pool_with_score):
-            combined_score = float(sub_cross_scores[idx]) + (3 * float(rrf_score))
+            combined_score = (float(sub_cross_scores[idx]) + cross_encoder_rrf_weight * float(rrf_score))
             final_ranked_pool.append((pid, combined_score))
         
         ranked = sorted(final_ranked_pool, key=lambda x: x[1], reverse=True)
