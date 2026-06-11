@@ -1,5 +1,5 @@
 
-"""Query-time hybrid retrieval (Precision-Optimized Cross-Encoder with Smart Windowing)."""
+"""Query-time retrieval (timed portion includes query embedding)."""
 from __future__ import annotations
 
 import os
@@ -120,7 +120,7 @@ def _page_ranking_from_chunk_scores(
     for pid, scores in page_chunks.items():
         scores.sort(reverse=True)
         if agg == "max_plus_mean_top3":
-            page_scores[pid] = float(0.5 * scores[0] + 0.5 * np.mean(scores[:3]))
+            page_scores[pid] = float(0.2 * scores[0] + 0.8 * np.mean(scores[:3]))
         else:
             page_scores[pid] = float(scores[0])
 
@@ -153,9 +153,10 @@ def _dense_hnsw_rankings(
     candidate_k: int,
     ef_min: int,
     ef_cap: int,
+    ef_floor: int,
     agg: str,
 ) -> List[List[int]]:
-    index.hnsw.efSearch = max(512, max(ef_min, min(candidate_k, ef_cap)))
+    index.hnsw.efSearch = max(ef_floor, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
     for i in range(len(query_vectors)):
@@ -226,29 +227,46 @@ def _simple_search_batch(
     candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.candidate_multiplier", 50))), top_k)
     bm25_candidate_k = max(top_k * max(1, int(hp_get(hp, "retrieve.bm25_candidate_multiplier", 50))), top_k)
     
-    rerank_cap = 12 
+    rerank_cap = int(
+    hp_get(hp, "retrieve.rerank_candidate_cap", 12)
+)
     
     use_bm25 = bool(hp_get(hp, "retrieve.use_bm25", True))
     use_title = bool(hp_get(hp, "retrieve.use_title_bm25", True)) and has_bm25_index(root, "title")
     use_page = bool(hp_get(hp, "retrieve.use_page_bm25", True)) and has_bm25_index(root, "page")
     use_expansion = bool(hp_get(hp, "retrieve.use_query_expansion", True))
     
-    model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    model_name = str(
+    hp_get(
+        hp,
+        "retrieve.cross_encoder_model",
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    ))
     cross_encoder_model = _get_cross_encoder(model_name)
     page_lookup = _get_page_lookup(root)
         
     rrf_k = int(hp_get(hp, "retrieve.rrf_k", 15))
     ef_min = int(hp_get(hp, "faiss_hnsw.ef_search_min", 128))
     ef_cap = int(hp_get(hp, "faiss_hnsw.ef_search_cap", 256))
+    ef_floor = int(hp_get(hp, "faiss_hnsw.ef_search_floor", 512))
     agg = str(hp_get(hp, "retrieve.page_aggregation", "max_plus_mean_top3"))
 
     w_dense = float(hp_get(hp, "retrieve.dense_rrf_weight", 1.0))
     w_chunk = float(hp_get(hp, "retrieve.bm25_chunk_rrf_weight", 1.2))
     w_title = float(hp_get(hp, "retrieve.title_bm25_rrf_weight", 1.8))
     w_page = float(hp_get(hp, "retrieve.page_bm25_rrf_weight", 1.0))
+    cross_encoder_rrf_weight = float(
+    hp_get(hp, "retrieve.cross_encoder_rrf_weight", 3.0))
 
     dense_rankings = _dense_hnsw_rankings(
-        query_vectors, page_ids, _get_faiss_index(root), candidate_k=candidate_k, ef_min=ef_min, ef_cap=ef_cap, agg=agg
+        query_vectors,
+        page_ids,
+        _get_faiss_index(root),
+        candidate_k=candidate_k,
+        ef_min=ef_min,
+        ef_cap=ef_cap,
+        ef_floor=ef_floor,
+        agg=agg,
     )
 
     bm25_chunk = _get_bm25("chunk", artifacts_dir) if use_bm25 and has_bm25_index(root, "chunk") else None
@@ -307,7 +325,7 @@ def _simple_search_batch(
         
         final_ranked_pool = []
         for idx, (pid, rrf_score) in enumerate(pool_with_score):
-            combined_score = float(sub_cross_scores[idx]) + (0.001 * float(rrf_score))
+            combined_score = (float(sub_cross_scores[idx]) + cross_encoder_rrf_weight * float(rrf_score))
             final_ranked_pool.append((pid, combined_score))
         
         ranked = sorted(final_ranked_pool, key=lambda x: x[1], reverse=True)

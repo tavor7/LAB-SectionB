@@ -20,6 +20,7 @@ env/
 
 # Build logs and local scratch (offline index runs, sweeps)
 logs/
+build_full*.log
 *.log
 
 # Full Wikipedia corpus is in the course handout (not in git)
