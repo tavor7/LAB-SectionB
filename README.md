@@ -202,7 +202,12 @@ print('chunking OK')
 
 ## Collaboration
 
-See **[AUTHORS.md](AUTHORS.md)**. Both partners must have meaningful commits in `git log`.
+| Member | GitHub | Primary contributions |
+|--------|--------|------------------------|
+| **Amit Tavor** | [@tavor7](https://github.com/tavor7) | Index build, paragraph chunking, FAISS/BM25 artifacts, hybrid retrieval |
+| **Maayan Galamidi** | [MaayanGalamidi](https://github.com/MaayanGalamidi) | Cross-encoder reranking, smart snippet windowing, hparams tuning |
+
+Both partners merged work on `main`. Both members must appear in `git log` with substantive commits.
 
 ## Submit
 
