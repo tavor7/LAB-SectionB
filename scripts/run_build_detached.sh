@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run index build detached from any IDE terminal (survives Cursor/SSH disconnect).
+# Run index build detached from the terminal (survives SSH disconnect).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

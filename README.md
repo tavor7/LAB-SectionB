@@ -101,7 +101,7 @@ flowchart TD
 | `scripts/check_submission.py` | Grading readiness smoke test |
 | `scripts/eval_public.py` | Public queries, NDCG@10 |
 | `scripts/build_index.py` | Offline full index build |
-| `scripts/run_build_detached.sh` | Detached build (survives IDE disconnect) |
+| `scripts/run_build_detached.sh` | Detached background index build |
 | `scripts/dev/` | Local sweep/tuning tools (optional) |
 | `artifacts/` | **Submission index** (Git LFS) |
 | `data/public_queries.json` | Public eval queries |
@@ -155,7 +155,7 @@ python scripts/build_index.py
 
 - Checkpoints every 200 pages → `artifacts/shards/` + `build_checkpoint.json`
 - Re-run the same command to resume (invalidates if chunking changes)
-- Detached build (survives closing IDE):
+- Detached build (survives terminal disconnect):
 
 ```bash
 scripts/run_build_detached.sh
