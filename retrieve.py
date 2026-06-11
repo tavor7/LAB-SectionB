@@ -108,6 +108,8 @@ def _page_ranking_from_chunk_scores(
     page_ids: np.ndarray,
     *,
     agg: str = "max",
+    agg_max_weight: float = 0.2,
+    agg_mean_weight: float = 0.8,
 ) -> List[int]:
     page_chunks: Dict[int, List[float]] = {}
     for idx, score in zip(chunk_indices, chunk_scores):
@@ -120,7 +122,9 @@ def _page_ranking_from_chunk_scores(
     for pid, scores in page_chunks.items():
         scores.sort(reverse=True)
         if agg == "max_plus_mean_top3":
-            page_scores[pid] = float(0.2 * scores[0] + 0.8 * np.mean(scores[:3]))
+            page_scores[pid] = float(
+                agg_max_weight * scores[0] + agg_mean_weight * np.mean(scores[:3])
+            )
         else:
             page_scores[pid] = float(scores[0])
 
@@ -155,18 +159,38 @@ def _dense_hnsw_rankings(
     ef_cap: int,
     ef_floor: int,
     agg: str,
+    agg_max_weight: float = 0.2,
+    agg_mean_weight: float = 0.8,
 ) -> List[List[int]]:
     index.hnsw.efSearch = max(ef_floor, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
+    agg_kw = {"agg_max_weight": agg_max_weight, "agg_mean_weight": agg_mean_weight}
     for i in range(len(query_vectors)):
-        out.append(_page_ranking_from_chunk_scores(indices[i], distances[i], page_ids, agg=agg))
+        out.append(
+            _page_ranking_from_chunk_scores(indices[i], distances[i], page_ids, agg=agg, **agg_kw)
+        )
     return out
 
 
-def _bm25_chunk_page_ranking(bm25_index, query: str, *, candidate_k: int, agg: str) -> List[int]:
+def _bm25_chunk_page_ranking(
+    bm25_index,
+    query: str,
+    *,
+    candidate_k: int,
+    agg: str,
+    agg_max_weight: float = 0.2,
+    agg_mean_weight: float = 0.8,
+) -> List[int]:
     doc_idx, doc_scores = bm25_index.search(query, top_k=candidate_k)
-    return _page_ranking_from_chunk_scores(doc_idx, doc_scores, bm25_index.page_ids, agg=agg)
+    return _page_ranking_from_chunk_scores(
+        doc_idx,
+        doc_scores,
+        bm25_index.page_ids,
+        agg=agg,
+        agg_max_weight=agg_max_weight,
+        agg_mean_weight=agg_mean_weight,
+    )
 
 
 def _bm25_page_level_ranking(bm25_index, query: str, *, candidate_k: int) -> List[int]:
@@ -193,7 +217,13 @@ def _bm25_expanded_page_ranking(
     return _bm25_page_level_ranking(bm25_index, query, candidate_k=candidate_k)
 
 
-def _get_smart_snippet(content_lower: str, query_tokens: List[str], window_size: int = 120) -> str:
+def _get_smart_snippet(
+    content_lower: str,
+    query_tokens: List[str],
+    *,
+    window_size: int = 120,
+    step: int = 20,
+) -> str:
     words = content_lower.split()
     if len(words) <= window_size:
         return " ".join(words)
@@ -201,8 +231,9 @@ def _get_smart_snippet(content_lower: str, query_tokens: List[str], window_size:
     q_set = set(query_tokens)
     best_start = 0
     max_matches = -1
+    step = max(1, step)
     
-    for start_idx in range(0, len(words) - window_size + 1, 20):
+    for start_idx in range(0, len(words) - window_size + 1, step):
         window = words[start_idx : start_idx + window_size]
         matches = sum(1 for w in window if w in q_set)
         if matches > max_matches:
@@ -256,7 +287,14 @@ def _simple_search_batch(
     w_title = float(hp_get(hp, "retrieve.title_bm25_rrf_weight", 1.8))
     w_page = float(hp_get(hp, "retrieve.page_bm25_rrf_weight", 1.0))
     cross_encoder_rrf_weight = float(
-    hp_get(hp, "retrieve.cross_encoder_rrf_weight", 3.0))
+        hp_get(hp, "retrieve.cross_encoder_rrf_weight", 3.0)
+    )
+    snippet_window = int(hp_get(hp, "retrieve.snippet_window_words", 120))
+    snippet_step = int(hp_get(hp, "retrieve.snippet_step_words", 20))
+    ce_batch_size = int(hp_get(hp, "retrieve.ce_batch_size", 128))
+    agg_max_weight = float(hp_get(hp, "retrieve.agg_max_weight", 0.2))
+    agg_mean_weight = float(hp_get(hp, "retrieve.agg_mean_weight", 0.8))
+    agg_kw = {"agg_max_weight": agg_max_weight, "agg_mean_weight": agg_mean_weight}
 
     dense_rankings = _dense_hnsw_rankings(
         query_vectors,
@@ -267,6 +305,7 @@ def _simple_search_batch(
         ef_cap=ef_cap,
         ef_floor=ef_floor,
         agg=agg,
+        **agg_kw,
     )
 
     bm25_chunk = _get_bm25("chunk", artifacts_dir) if use_bm25 and has_bm25_index(root, "chunk") else None
@@ -287,7 +326,11 @@ def _simple_search_batch(
         weights: List[float] = [w_dense]
 
         if bm25_chunk is not None:
-            rankings.append(_bm25_chunk_page_ranking(bm25_chunk, q_orig, candidate_k=bm25_candidate_k, agg=agg))
+            rankings.append(
+                _bm25_chunk_page_ranking(
+                    bm25_chunk, q_orig, candidate_k=bm25_candidate_k, agg=agg, **agg_kw
+                )
+            )
             weights.append(w_chunk)
         if bm25_title is not None:
             rankings.append(_bm25_expanded_page_ranking(bm25_title, q_orig, q_kw, candidate_k=bm25_candidate_k))
@@ -306,11 +349,17 @@ def _simple_search_batch(
         pool_sizes.append(len(pool_with_score))
         for pid, _ in pool_with_score:
             title, content_lower = page_lookup.get(pid, ("", ""))
-            snippet = _get_smart_snippet(content_lower, q_tokens, window_size=120)
+            snippet = _get_smart_snippet(
+                content_lower, q_tokens, window_size=snippet_window, step=snippet_step
+            )
             summary = f"Title: {title}. Context: {snippet}" if title else snippet
             all_pairs.append((q_enhanced, summary))
 
-    all_scores = cross_encoder_model.predict(all_pairs, batch_size=128, show_progress_bar=False) if all_pairs else []
+    all_scores = (
+        cross_encoder_model.predict(all_pairs, batch_size=ce_batch_size, show_progress_bar=False)
+        if all_pairs
+        else []
+    )
 
     results: List[List[int]] = []
     score_idx = 0

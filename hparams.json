@@ -24,8 +24,8 @@
     "use_query_expansion": true,
     "use_title_bm25": true,
     "use_page_bm25": true,
-    "candidate_multiplier": 400,
-    "bm25_candidate_multiplier": 400,
+    "candidate_multiplier": 425,
+    "bm25_candidate_multiplier": 500,
     "rerank_candidate_cap": 20,
     "page_aggregation": "max_plus_mean_top3",
     "rrf_k": 20,
@@ -34,7 +34,12 @@
     "title_bm25_rrf_weight": 0.65,
     "page_bm25_rrf_weight": 0.07,
     "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "cross_encoder_rrf_weight": 3.0
+    "cross_encoder_rrf_weight": 3.0,
+    "agg_max_weight": 0.2,
+    "agg_mean_weight": 0.8,
+    "snippet_window_words": 120,
+    "snippet_step_words": 20,
+    "ce_batch_size": 128
   },
   "build": {
     "embed_batch_size": 64,
