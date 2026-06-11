@@ -19,6 +19,7 @@ env/
 *~
 
 # Build logs (offline index runs)
+logs/
 build_full*.log
 *.log
 

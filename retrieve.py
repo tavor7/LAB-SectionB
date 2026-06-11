@@ -153,9 +153,10 @@ def _dense_hnsw_rankings(
     candidate_k: int,
     ef_min: int,
     ef_cap: int,
+    ef_floor: int,
     agg: str,
 ) -> List[List[int]]:
-    index.hnsw.efSearch = max(512, max(ef_min, min(candidate_k, ef_cap)))
+    index.hnsw.efSearch = max(ef_floor, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
     for i in range(len(query_vectors)):
@@ -247,6 +248,7 @@ def _simple_search_batch(
     rrf_k = int(hp_get(hp, "retrieve.rrf_k", 15))
     ef_min = int(hp_get(hp, "faiss_hnsw.ef_search_min", 128))
     ef_cap = int(hp_get(hp, "faiss_hnsw.ef_search_cap", 256))
+    ef_floor = int(hp_get(hp, "faiss_hnsw.ef_search_floor", 512))
     agg = str(hp_get(hp, "retrieve.page_aggregation", "max_plus_mean_top3"))
 
     w_dense = float(hp_get(hp, "retrieve.dense_rrf_weight", 1.0))
@@ -257,7 +259,14 @@ def _simple_search_batch(
     hp_get(hp, "retrieve.cross_encoder_rrf_weight", 3.0))
 
     dense_rankings = _dense_hnsw_rankings(
-        query_vectors, page_ids, _get_faiss_index(root), candidate_k=candidate_k, ef_min=ef_min, ef_cap=ef_cap, agg=agg
+        query_vectors,
+        page_ids,
+        _get_faiss_index(root),
+        candidate_k=candidate_k,
+        ef_min=ef_min,
+        ef_cap=ef_cap,
+        ef_floor=ef_floor,
+        agg=agg,
     )
 
     bm25_chunk = _get_bm25("chunk", artifacts_dir) if use_bm25 and has_bm25_index(root, "chunk") else None

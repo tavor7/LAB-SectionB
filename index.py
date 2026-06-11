@@ -279,11 +279,14 @@ def build_index(
     embed_batch_size = max(1, embed_batch_size)
 
     # Resume if checkpoint exists and matches current selection + chunking params.
+    chunk_mode = str(hp_get(hp, "chunking.mode", "word_windows")).lower()
     selection_key = {
         "num_pages": int(len(selected_paths)),
         "first": str(selected_paths[0].name) if selected_paths else None,
         "last": str(selected_paths[-1].name) if selected_paths else None,
+        "chunk_mode": chunk_mode,
         "chunk_words": int(hp_get(hp, "chunking.chunk_words", 140)),
+        "max_chunk_words": int(hp_get(hp, "chunking.max_chunk_words", 400)),
         "overlap_words": int(hp_get(hp, "chunking.overlap_words", 35)),
         "title_chunk": bool(hp_get(hp, "chunking.title_chunk", True)),
         "dev_public": bool(dev_public),
@@ -493,8 +496,10 @@ def build_index(
         "hnsw_M": M,
         "hnsw_ef_construction": ef_construction,
         "chunking": {
-            "strategy": "word_windows",
+            "strategy": chunk_mode,
+            "mode": chunk_mode,
             "chunk_words": int(hp_get(hp, "chunking.chunk_words", 140)),
+            "max_chunk_words": int(hp_get(hp, "chunking.max_chunk_words", 400)),
             "overlap_words": int(hp_get(hp, "chunking.overlap_words", 35)),
             "title_chunk": bool(hp_get(hp, "chunking.title_chunk", True)),
         },
