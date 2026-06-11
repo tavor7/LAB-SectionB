@@ -55,17 +55,7 @@ python scripts/eval_public.py             # mean NDCG@10 + query time
 | 4. Smart snippets | Query-aligned 120-word CE context | Better rerank input |
 | 5. **Paragraph index** | Paragraph packing + word overlap (400/100) | **Current `artifacts/`** |
 
-### Partner contribution (Maayan Galamidi)
-
-- Cross-encoder reranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`)
-- Smart snippet windowing for CE input
-- Retrieve hyperparameter tuning (`hparams.json`)
-
-### Index build (Amit Tavor)
-
-- **Paragraph chunking** — merge `\n\n` paragraphs up to `max_chunk_words`, then word-level overlap
-- Checkpointed offline build with crash resume
-- Previous 140/35 word-window index: `artifacts_backup_word140_o35/` (local, gitignored)
+**Current submission:** paragraph chunking (merge `\n\n` paragraphs up to `max_chunk_words`, word-level overlap), multi-index RRF recall, cross-encoder rerank with smart snippets, checkpointed offline build.
 
 ---
 
@@ -199,15 +189,6 @@ print('chunking OK')
 ```
 
 ---
-
-## Collaboration
-
-| Member | GitHub | Primary contributions |
-|--------|--------|------------------------|
-| **Amit Tavor** | [@tavor7](https://github.com/tavor7) | Index build, paragraph chunking, FAISS/BM25 artifacts, hybrid retrieval |
-| **Maayan Galamidi** | [MaayanGalamidi](https://github.com/MaayanGalamidi) | Cross-encoder reranking, smart snippet windowing, hparams tuning |
-
-Both partners merged work on `main`. Both members must appear in `git log` with substantive commits.
 
 ## Submit
 
