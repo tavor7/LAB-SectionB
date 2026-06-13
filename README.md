@@ -190,6 +190,14 @@ print('chunking OK')
 
 ---
 
+## Presentation 
+
+Project presentation (architecture, hyperparameters, engineering journey):
+
+https://docs.google.com/presentation/d/1OPVwMb5uu6Dr1oFIxrLpiVEEDJYNWF4e/edit?usp=sharing&ouid=116841324500859959435&rtpof=true&sd=true
+
+---
+
 ## Submit
 
-Public GitHub repo: this code, `data/public_queries.json`, LFS-backed `artifacts/`, and this README.
+Public GitHub repo: this code, `data/public_queries.json`, LFS-backed `artifacts/`, this README, and the presentation link above.
