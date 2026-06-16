@@ -160,7 +160,7 @@ python scripts/build_index.py
 
 ---
 
-## Video
+## Video presentation
 
 Project walkthrough (architecture, hyperparameters, engineering journey):
 
