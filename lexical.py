@@ -14,7 +14,7 @@ import numpy as np
 
 from utils import ARTIFACTS_DIR
 
-# Legacy (chunk index) filenames — grading / check_submission compatibility.
+# Legacy (chunk index) filenames — grading compatibility.
 BM25_VOCAB_NAME = "bm25_vocab.json"
 BM25_IDF_NAME = "bm25_idf.npy"
 BM25_INDPTR_NAME = "bm25_indptr.npy"

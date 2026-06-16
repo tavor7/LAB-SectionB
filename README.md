@@ -6,9 +6,9 @@ Wikipedia **page retrieval** for Section B. The autograder calls `main.run(queri
 
 | Metric | Value |
 |--------|-------|
-| `mean_ndcg@10` | **0.4752** (29 public queries in `data/public_queries.json`) |
-| `query_phase_time` | **~20s** (limit 60s) |
-| Index vectors | **~212k** paragraph chunks |
+| `mean_ndcg@10` | **0.4827** (29 public queries in `data/public_queries.json`) |
+| `query_phase_time` | **~22s** (22.0s measured; limit 60s) |
+| Index vectors | **211,665** paragraph chunks |
 
 ### What lives where
 
@@ -19,14 +19,11 @@ LAB-SectionB/
 ├── artifacts/                  # submission index (Git LFS)
 ├── data/public_queries.json    # public eval queries
 ├── scripts/
-│   ├── check_submission.py
-│   ├── eval_public.py
-│   ├── build_index.py
-│   ├── run_build_detached.sh   # crash-safe detached build
-│   └── dev/                    # local R&D (optional)
-├── logs/                       # build logs (gitignored)
-├── local/                      # handout copies (gitignored)
-└── artifacts_backup*/          # old index backups (gitignored)
+│   ├── eval_public.py          # public self-test (grading-style)
+│   └── build_index.py          # offline index build (handout; not run at grading)
+├── logs/                       # build logs (gitignored, local only)
+├── local/                      # handout copies (gitignored, local only)
+└── artifacts_backup*/          # old index backups (gitignored, local only)
 ```
 
 ---
@@ -38,9 +35,8 @@ Dependencies are assumed **already installed** (`numpy`, `sentence-transformers`
 ```bash
 git clone https://github.com/tavor7/LAB-SectionB.git
 cd LAB-SectionB
-git lfs pull                              # required: large artifacts
-python scripts/check_submission.py        # artifacts + run() smoke test
-python scripts/eval_public.py             # mean NDCG@10 + query time
+git lfs pull                    # required: large artifacts
+python scripts/eval_public.py     # mean NDCG@10 + query time
 ```
 
 ---
@@ -53,9 +49,9 @@ python scripts/eval_public.py             # mean NDCG@10 + query time
 | 2. Multi-index | + BM25 title & page, tuned RRF | Stronger recall |
 | 3. Cross-encoder | Batched CE rerank on RRF pool | Major NDCG gain |
 | 4. Smart snippets | Query-aligned 120-word CE context | Better rerank input |
-| 5. **Paragraph index** | Paragraph packing + word overlap (400/100) | **Current `artifacts/`** |
+| 5. **Paragraph index** | Paragraph packing (max 400 words/chunk) + 100-word overlap | **0.4827 NDCG** (current `artifacts/`) |
 
-**Current submission:** paragraph chunking (merge `\n\n` paragraphs up to `max_chunk_words`, word-level overlap), multi-index RRF recall, cross-encoder rerank with smart snippets, checkpointed offline build.
+**Current submission:** paragraph chunking (merge `\n\n` paragraphs up to **400 words max** per chunk, **100-word** overlap), multi-index RRF recall, cross-encoder rerank with smart snippets, checkpointed offline build.
 
 ---
 
@@ -96,13 +92,14 @@ flowchart TD
 | `main.py` | `run(queries)` → ranked `page_id` lists |
 | `retrieve.py` | Multi-index RRF + cross-encoder rerank |
 | `chunk.py` | Paragraph or word-window chunking |
+| `embed.py` | MiniLM query/chunk embeddings |
 | `index.py` | Offline FAISS + BM25 writers (checkpointed) |
-| `hparams.json` | Chunking, FAISS, BM25, retrieve, build params |
-| `scripts/check_submission.py` | Grading readiness smoke test |
-| `scripts/eval_public.py` | Public queries, NDCG@10 |
-| `scripts/build_index.py` | Offline full index build |
-| `scripts/run_build_detached.sh` | Detached background index build |
-| `scripts/dev/` | Local sweep/tuning tools (optional) |
+| `lexical.py` | BM25 build/load/search |
+| `query_expand.py` | Stopword-stripped keyword queries for BM25 |
+| `config.py` / `hparams.json` | Hyperparameters |
+| `eval.py` | NDCG metrics (course file) |
+| `scripts/eval_public.py` | Public queries, NDCG@10 (grading-style self-test) |
+| `scripts/build_index.py` | Offline full index build (handout; not run at grading) |
 | `artifacts/` | **Submission index** (Git LFS) |
 | `data/public_queries.json` | Public eval queries |
 
@@ -151,16 +148,7 @@ pip install -r requirements.txt    # developers only
 python scripts/build_index.py
 ```
 
-**Crash-safe / long runs:**
-
-- Checkpoints every 200 pages → `artifacts/shards/` + `build_checkpoint.json`
-- Re-run the same command to resume (invalidates if chunking changes)
-- Detached build (survives terminal disconnect):
-
-```bash
-scripts/run_build_detached.sh
-tail -f logs/build_paragraph.log
-```
+**Crash-safe / long runs:** checkpoints every 200 pages under `artifacts/shards/` + `build_checkpoint.json`. Re-run the same command to resume (invalidates if chunking changes).
 
 **Backup before rebuild:**
 
@@ -172,32 +160,9 @@ python scripts/build_index.py
 
 ---
 
-## Pre-submission checklist
+## Video
 
-```bash
-git lfs pull
-python scripts/check_submission.py
-python scripts/eval_public.py    # query_phase_time < 60s
-python -c "
-import json
-h=json.load(open('hparams.json'))['chunking']
-m=json.load(open('artifacts/meta.json'))['chunking']
-assert m['strategy']==h.get('mode', m['strategy'])
-assert m['max_chunk_words']==h['max_chunk_words']
-print('chunking OK')
-"
-```
+Project walkthrough (architecture, hyperparameters, engineering journey):
 
----
+https://drive.google.com/file/d/1nvgg49NIbjJFGhySzKoMrGJePG-9vlj5/view?usp=sharing
 
-## Presentation 
-
-Project presentation (architecture, hyperparameters, engineering journey):
-
-https://docs.google.com/presentation/d/1OPVwMb5uu6Dr1oFIxrLpiVEEDJYNWF4e/edit?usp=sharing&ouid=116841324500859959435&rtpof=true&sd=true
-
----
-
-## Submit
-
-Public GitHub repo: this code, `data/public_queries.json`, LFS-backed `artifacts/`, this README, and the presentation link above.
