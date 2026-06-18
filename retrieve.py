@@ -51,6 +51,7 @@ def clear_retrieve_cache() -> None:
 
 
 def _get_page_ids(root: Path) -> np.ndarray:
+    """Load and cache page ID mappings."""
     global _CACHED_PAGE_IDS
     if _CACHED_PAGE_IDS is None:
         _CACHED_PAGE_IDS = np.load(root / "page_ids.npy")
@@ -58,6 +59,7 @@ def _get_page_ids(root: Path) -> np.ndarray:
 
 
 def _get_bm25(prefix: str, artifacts_dir: Optional[Path]):
+    """Load and cache a BM25 index by prefix."""
     global _CACHED_BM25_CHUNK, _CACHED_BM25_TITLE, _CACHED_BM25_PAGE
     root = resolve_artifacts_dir(artifacts_dir)
     if prefix == "chunk":
@@ -76,6 +78,7 @@ def _get_bm25(prefix: str, artifacts_dir: Optional[Path]):
 
 
 def _get_faiss_index(artifacts_dir: Optional[Path]):
+    """Load and cache the FAISS retrieval index."""
     global _CACHED_FAISS_INDEX
     if _CACHED_FAISS_INDEX is None:
         _CACHED_FAISS_INDEX, _, _ = load_index(artifacts_dir)
@@ -83,6 +86,7 @@ def _get_faiss_index(artifacts_dir: Optional[Path]):
 
 
 def _get_cross_encoder(model_name: str):
+    """Load and cache the cross-encoder reranker."""
     global _CACHED_CROSS_ENCODER
     if CrossEncoder is None:
         raise ImportError("sentence-transformers is required for cross-encoder reranking.")
@@ -92,6 +96,7 @@ def _get_cross_encoder(model_name: str):
 
 
 def _get_page_lookup(root: Path) -> Dict[int, Tuple[str, str]]:
+    """Load page metadata used during reranking."""
     global _CACHED_PAGE_LOOKUP
     if _CACHED_PAGE_LOOKUP is None:
         data = np.load(root / PAGE_FEATURES_NAME, allow_pickle=True)
@@ -111,6 +116,7 @@ def _page_ranking_from_chunk_scores(
     agg_max_weight: float = 0.2,
     agg_mean_weight: float = 0.8,
 ) -> List[int]:
+    """Aggregate chunk scores into page-level rankings."""
     page_chunks: Dict[int, List[float]] = {}
     for idx, score in zip(chunk_indices, chunk_scores):
         if idx < 0:
@@ -139,6 +145,7 @@ def _rrf_fuse_with_scores(
     top_k: int,
     weights: Optional[List[float]] = None,
 ) -> List[Tuple[int, float]]:
+    """Fuse rankings using Reciprocal Rank Fusion."""
     scores: Dict[int, float] = {}
     if weights is None:
         weights = [1.0] * len(rankings)
@@ -162,6 +169,7 @@ def _dense_hnsw_rankings(
     agg_max_weight: float = 0.2,
     agg_mean_weight: float = 0.8,
 ) -> List[List[int]]:
+    """Generate dense retrieval rankings with HNSW."""
     index.hnsw.efSearch = max(ef_floor, max(ef_min, min(candidate_k, ef_cap)))
     distances, indices = index.search(query_vectors, candidate_k)
     out: List[List[int]] = []
@@ -182,6 +190,7 @@ def _bm25_chunk_page_ranking(
     agg_max_weight: float = 0.2,
     agg_mean_weight: float = 0.8,
 ) -> List[int]:
+    """Create page rankings from chunk-level BM25 results."""
     doc_idx, doc_scores = bm25_index.search(query, top_k=candidate_k)
     return _page_ranking_from_chunk_scores(
         doc_idx,
@@ -194,11 +203,13 @@ def _bm25_chunk_page_ranking(
 
 
 def _bm25_page_level_ranking(bm25_index, query: str, *, candidate_k: int) -> List[int]:
+    """Retrieve page rankings directly from a BM25 index."""
     doc_idx, _ = bm25_index.search(query, top_k=candidate_k)
     return [int(bm25_index.page_ids[int(i)]) for i in doc_idx]
 
 
 def _merged_bm25_query(q_orig: str, q_kw: str) -> str:
+    """Merge original and expanded query terms."""
     if q_orig == q_kw:
         return q_orig
     seen: Set[str] = set()
@@ -213,6 +224,7 @@ def _merged_bm25_query(q_orig: str, q_kw: str) -> str:
 def _bm25_expanded_page_ranking(
     bm25_index, q_orig: str, q_kw: str, *, candidate_k: int
 ) -> List[int]:
+    """Retrieve BM25 rankings using an expanded query."""
     query = _merged_bm25_query(q_orig, q_kw)
     return _bm25_page_level_ranking(bm25_index, query, candidate_k=candidate_k)
 
@@ -224,6 +236,7 @@ def _get_smart_snippet(
     window_size: int = 120,
     step: int = 20,
 ) -> str:
+    """Select the snippet with the highest query-term overlap."""
     words = content_lower.split()
     if len(words) <= window_size:
         return " ".join(words)
@@ -249,6 +262,7 @@ def _simple_search_batch(
     top_k: int,
     artifacts_dir: Optional[Path],
 ) -> List[List[int]]:
+    """Execute retrieval, fusion and reranking for a batch of queries."""
     hp = load_hparams()
     root = resolve_artifacts_dir(artifacts_dir)
 
@@ -389,6 +403,7 @@ def search_batch(
     top_k: int = K_EVAL,
     artifacts_dir: Optional[Path] = None,
 ) -> List[List[int]]:
+    """Return top-k page IDs for each query."""
     if not queries:
         return []
     return _simple_search_batch(queries, top_k=top_k, artifacts_dir=artifacts_dir)
